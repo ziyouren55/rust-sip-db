@@ -1,7 +1,7 @@
 use crate::core::error::DbError;
 use crate::core::types::{DataType, Table};
 use crate::core::storage::Storage;
-use super::{SqlStatement, WhereClause, Operator};
+use super::{SqlStatement, WhereClause, Operator, TableFormatter};
 
 pub struct SqlExecutor<'a> {
     storage: &'a mut dyn Storage,
@@ -73,22 +73,42 @@ impl<'a> SqlExecutor<'a> {
                 let table_data = self.storage.get_table(&table)?
                     .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table)))?;
 
-                // 打印表头
-                println!("| {} |", columns.join(" | "));
-                println!("|{}|", "-".repeat(columns.len() * 3 + columns.iter().map(|s| s.len()).sum::<usize>()));
+                // 处理 SELECT * 的情况
+                let is_select_all = columns.len() == 1 && columns[0] == "*";
+                let display_columns = if is_select_all {
+                    // 获取表中所有列名
+                    table_data.columns.iter().map(|c| c.name.clone()).collect()
+                } else {
+                    columns
+                };
 
-                // 打印数据行
+                // 收集满足条件的行数据
+                let mut selected_rows: Vec<Vec<String>> = Vec::new();
                 for row in &table_data.rows {
                     if where_clause.is_none() || evaluate_where_clause(row, where_clause.as_ref().unwrap(), &table_data.columns)? {
-                        let values: Vec<String> = columns.iter().map(|col| {
-                            if let Some(index) = table_data.columns.iter().position(|c| &c.name == col) {
-                                row[index].to_string()
-                            } else {
-                                "NULL".to_string()
-                            }
-                        }).collect();
-                        println!("| {} |", values.join(" | "));
+                        let values: Vec<String> = if is_select_all {
+                            // 如果是 SELECT *，获取所有列的值
+                            row.iter().map(|val| val.to_string()).collect()
+                        } else {
+                            // 否则只获取指定列的值
+                            display_columns.iter().map(|col| {
+                                if let Some(index) = table_data.columns.iter().position(|c| &c.name == col) {
+                                    row[index].to_string()
+                                } else {
+                                    "NULL".to_string()
+                                }
+                            }).collect()
+                        };
+                        selected_rows.push(values);
                     }
+                }
+
+                // 使用TableFormatter格式化并输出结果
+                if !selected_rows.is_empty() {
+                    let formatted_table = TableFormatter::format_table(&display_columns, &selected_rows);
+                    print!("{}", formatted_table);
+                } else {
+                    println!("查询结果为空");
                 }
                 Ok(())
             }

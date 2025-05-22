@@ -55,11 +55,13 @@ impl Parser {
 
             let data_type = self.parse_column_type()?;
             let nullable = self.parse_nullable()?;
+            let primary_key = self.parse_primary_key()?;
             
             columns.push(Column {
                 name: column_name,
                 data_type,
                 nullable,
+                primary_key,
             });
 
             match self.peek() {
@@ -75,6 +77,12 @@ impl Parser {
             }
         }
 
+        // 确保只有一个主键
+        let primary_key_count = columns.iter().filter(|c| c.primary_key).count();
+        if primary_key_count > 1 {
+            return Err(DbError::SqlError("表中只能有一个主键".to_string()));
+        }
+
         Ok(SqlStatement::CreateTable { name, columns })
     }
 
@@ -82,7 +90,20 @@ impl Parser {
         match self.next() {
             Some(Token::Identifier(type_name)) => {
                 match type_name.to_uppercase().as_str() {
-                    "INT" => Ok(ColumnType::Int),
+                    "INT" => {
+                        // 检查是否有位数标注
+                        if let Some(Token::LParen) = self.peek() {
+                            self.next(); // 消费左括号
+                            let bits = match self.next() {
+                                Some(Token::Number(n)) => n as usize,
+                                _ => return Err(DbError::SqlError("期望整数位数".to_string())),
+                            };
+                            self.expect(Token::RParen)?;
+                            Ok(ColumnType::Int(Some(bits)))
+                        } else {
+                            Ok(ColumnType::Int(None))
+                        }
+                    },
                     "VARCHAR" => {
                         self.expect(Token::LParen)?;
                         let length = match self.next() {
@@ -107,6 +128,16 @@ impl Parser {
                 Ok(false)
             }
             _ => Ok(true),
+        }
+    }
+
+    fn parse_primary_key(&mut self) -> Result<bool, DbError> {
+        if let Some(Token::Primary) = self.peek() {
+            self.next(); // 消费PRIMARY
+            self.expect(Token::Key)?; // 消费KEY
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -226,21 +257,29 @@ impl Parser {
         self.expect(Token::Select)?;
         
         let mut columns = Vec::new();
-        loop {
-            let column = match self.next() {
-                Some(Token::Identifier(name)) => name,
-                Some(Token::String(s)) => s,
-                _ => return Err(DbError::SqlError("期望列名或字符串".to_string())),
-            };
-            columns.push(column);
+        
+        // 检查是否为星号(*)
+        if let Some(&Token::Star) = self.peek() {
+            self.next(); // 消耗星号
+            columns.push("*".to_string()); // 使用星号字符串表示所有列
+        } else {
+            // 常规列名列表处理
+            loop {
+                let column = match self.next() {
+                    Some(Token::Identifier(name)) => name,
+                    Some(Token::String(s)) => s,
+                    _ => return Err(DbError::SqlError("期望列名或字符串".to_string())),
+                };
+                columns.push(column);
 
-            match self.peek() {
-                Some(&Token::Comma) => {
-                    self.next();
-                    continue;
+                match self.peek() {
+                    Some(&Token::Comma) => {
+                        self.next();
+                        continue;
+                    }
+                    Some(&Token::From) => break,
+                    _ => return Err(DbError::SqlError("期望逗号或FROM子句".to_string())),
                 }
-                Some(&Token::From) => break,
-                _ => return Err(DbError::SqlError("期望逗号或FROM子句".to_string())),
             }
         }
 

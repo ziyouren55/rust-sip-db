@@ -1,10 +1,12 @@
 mod lexer;
 mod parser;
 mod executor;
+mod formatter;
 
 pub use lexer::{Token, Lexer};
 pub use parser::Parser;
 pub use executor::SqlExecutor;
+pub use formatter::TableFormatter;
 
 use crate::core::error::DbError;
 use crate::core::types::{DataType, Column};

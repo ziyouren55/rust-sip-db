@@ -15,6 +15,8 @@ pub enum Token {
     From,
     Where,
     Select,
+    Primary,
+    Key,
     // 操作符
     Eq,    // =
     Ne,    // !=
@@ -27,6 +29,7 @@ pub enum Token {
     Semicolon, // ;
     LParen,    // (
     RParen,    // )
+    Star,      // *
     // 字面量
     Identifier(String),
     String(String),
@@ -86,6 +89,8 @@ impl Lexer {
                     "FROM" => Token::From,
                     "WHERE" => Token::Where,
                     "SELECT" => Token::Select,
+                    "PRIMARY" => Token::Primary,
+                    "KEY" => Token::Key,
                     _ => Token::Identifier(identifier),
                 };
                 tokens.push(token);
@@ -129,6 +134,7 @@ impl Lexer {
                 ';' => Token::Semicolon,
                 '(' => Token::LParen,
                 ')' => Token::RParen,
+                '*' => Token::Star,
                 _ => return Err(DbError::SqlError(format!("未知字符: {}", c))),
             };
             tokens.push(token);

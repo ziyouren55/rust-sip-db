@@ -53,7 +53,10 @@ fn main() {
         // 验证最终状态
         "SELECT id, name, age, email FROM users",
         "SELECT order_id, user_id, product, amount, order_date FROM orders",
-        "SELECT id, name, price, stock FROM products"
+        "SELECT id, name, price, stock FROM products",
+
+        // 测试 * 
+        "SELECT * FROM users",
     ];
 
     // 第二组测试：高级功能测试
