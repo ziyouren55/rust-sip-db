@@ -32,7 +32,7 @@ impl Cli {
             if is_continuation {
                 print!("-> ");
             } else {
-                print!("> ");
+            print!("> ");
             }
             std::io::stdout().flush()?;
 

@@ -21,6 +21,10 @@ pub enum Token {
     Or,     // 新增 OR 关键字
     Is,     // 新增 IS 关键字
     Null,   // 新增 NULL 关键字
+    Order,  // ORDER BY 子句的 ORDER
+    By,     // ORDER BY 子句的 BY
+    Asc,    // 升序排序
+    Desc,   // 降序排序
     // 操作符
     Eq,    // =
     Ne,    // !=
@@ -117,6 +121,10 @@ impl Lexer {
                     "OR" => Token::Or,      // 新增 OR 关键字识别
                     "IS" => Token::Is,      // 新增 IS 关键字识别
                     "NULL" => Token::Null,  // 新增 NULL 关键字识别
+                    "ORDER" => Token::Order, // ORDER BY 子句的 ORDER
+                    "BY" => Token::By,       // ORDER BY 子句的 BY
+                    "ASC" => Token::Asc,     // 升序排序
+                    "DESC" => Token::Desc,   // 降序排序
                     _ => Token::Identifier(identifier),
                 };
                 tokens.push(token);

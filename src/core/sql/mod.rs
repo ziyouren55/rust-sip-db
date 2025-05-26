@@ -51,6 +51,7 @@ pub enum SqlStatement {
         columns: Vec<String>,
         table: String,
         where_clause: Option<WhereClause>,
+        order_by: Option<OrderBy>,
     },
     SelectExpression {
         expressions: Vec<Expression>,
@@ -59,6 +60,7 @@ pub enum SqlStatement {
         expressions: Vec<Expression>,
         table: String,
         where_clause: Option<WhereClause>,
+        order_by: Option<OrderBy>,
     },
 }
 
@@ -112,6 +114,20 @@ pub enum ArithmeticOperator {
     Subtract, // -
     Multiply, // *
     Divide,   // /
+}
+
+// 排序方向
+#[derive(Debug, PartialEq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+// 排序子句
+#[derive(Debug)]
+pub struct OrderBy {
+    pub column: String,
+    pub direction: SortDirection,
 }
 
 // SQL解析器

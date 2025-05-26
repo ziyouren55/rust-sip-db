@@ -185,7 +185,7 @@ impl<'a> SqlExecutor<'a> {
                 
                 Ok(())
             }
-            SqlStatement::SelectWithExpressions { expressions, table, where_clause } => {
+            SqlStatement::SelectWithExpressions { expressions, table, where_clause, order_by } => {
                 let table_data = self.storage.get_table(&table)?
                     .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table)))?;
                 
@@ -208,6 +208,11 @@ impl<'a> SqlExecutor<'a> {
                         }
                         selected_rows.push(row_values);
                     }
+                }
+                
+                // 如果有ORDER BY子句，对结果进行排序
+                if let Some(order_by) = order_by {
+                    self.apply_order_by(&mut selected_rows, &headers, &order_by)?;
                 }
                 
                 // 使用TableFormatter格式化并输出结果
@@ -264,7 +269,7 @@ impl<'a> SqlExecutor<'a> {
                 }
                 Ok(())
             }
-            SqlStatement::Select { columns, table, where_clause } => {
+            SqlStatement::Select { columns, table, where_clause, order_by } => {
                 let table_data = self.storage.get_table(&table)?
                     .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table)))?;
 
@@ -296,6 +301,11 @@ impl<'a> SqlExecutor<'a> {
                         };
                         selected_rows.push(values);
                     }
+                }
+
+                // 如果有ORDER BY子句，对结果进行排序
+                if let Some(order_by) = order_by {
+                    self.apply_order_by(&mut selected_rows, &display_columns, &order_by)?;
                 }
 
                 // 使用TableFormatter格式化并输出结果
@@ -412,6 +422,39 @@ impl<'a> SqlExecutor<'a> {
                 format!("{} {} {}", left_str, op_str, right_str)
             },
         }
+    }
+
+    // 应用ORDER BY排序
+    fn apply_order_by(&self, rows: &mut Vec<Vec<String>>, headers: &[String], order_by: &super::OrderBy) -> Result<(), DbError> {
+        // 查找排序列的索引
+        let sort_col_index = headers.iter().position(|col| col == &order_by.column)
+            .ok_or_else(|| DbError::SqlError(format!("ORDER BY列 {} 不存在于结果集中", order_by.column)))?;
+        
+        // 排序
+        rows.sort_by(|a, b| {
+            let a_val = &a[sort_col_index];
+            let b_val = &b[sort_col_index];
+            
+            // 首先尝试将值解析为数字并比较
+            match (a_val.parse::<i64>(), b_val.parse::<i64>()) {
+                (Ok(a_num), Ok(b_num)) => {
+                    // 数值比较
+                    match order_by.direction {
+                        super::SortDirection::Asc => a_num.cmp(&b_num),
+                        super::SortDirection::Desc => b_num.cmp(&a_num),
+                    }
+                },
+                _ => {
+                    // 字符串比较
+                    match order_by.direction {
+                        super::SortDirection::Asc => a_val.cmp(b_val),
+                        super::SortDirection::Desc => b_val.cmp(a_val),
+                    }
+                }
+            }
+        });
+        
+        Ok(())
     }
 }
 

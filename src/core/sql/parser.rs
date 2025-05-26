@@ -528,10 +528,14 @@ impl Parser {
                 None
             };
 
+            // 解析 ORDER BY 子句
+            let order_by = self.parse_order_by()?;
+
             return Ok(SqlStatement::Select { 
                 columns: vec!["*".to_string()], 
                 table, 
-                where_clause 
+                where_clause,
+                order_by,
             });
         }
         
@@ -587,6 +591,9 @@ impl Parser {
             None
         };
 
+        // 解析 ORDER BY 子句
+        let order_by = self.parse_order_by()?;
+
         // 如果有表达式，将所有列名转换为Column表达式
         if has_expression {
             // 将普通列名转换为Column表达式
@@ -597,13 +604,15 @@ impl Parser {
             Ok(SqlStatement::SelectWithExpressions { 
                 expressions, 
                 table, 
-                where_clause 
+                where_clause,
+                order_by,
             })
         } else {
             Ok(SqlStatement::Select { 
                 columns, 
                 table, 
-                where_clause 
+                where_clause,
+                order_by,
             })
         }
     }
@@ -711,6 +720,38 @@ impl Parser {
         let value = self.parse_value()?;
 
         Ok(super::WhereClause::Simple { column, operator, value })
+    }
+
+    fn parse_order_by(&mut self) -> Result<Option<super::OrderBy>, DbError> {
+        // 检查是否有 ORDER BY 关键字
+        if let Some(&Token::Order) = self.peek() {
+            self.next(); // 消费 ORDER
+            self.expect(Token::By)?; // 消费 BY
+
+            // 获取排序列名
+            let column = match self.next() {
+                Some(Token::Identifier(name)) => name,
+                _ => return Err(DbError::SqlError("期望列名".to_string())),
+            };
+
+            // 获取排序方向（可选）
+            let direction = match self.peek() {
+                Some(&Token::Asc) => {
+                    self.next(); // 消费 ASC
+                    super::SortDirection::Asc
+                },
+                Some(&Token::Desc) => {
+                    self.next(); // 消费 DESC
+                    super::SortDirection::Desc
+                },
+                _ => super::SortDirection::Asc, // 默认升序
+            };
+
+            return Ok(Some(super::OrderBy { column, direction }));
+        }
+
+        // 如果没有 ORDER BY 子句，返回 None
+        Ok(None)
     }
 
     fn expect(&mut self, expected: Token) -> Result<(), DbError> {
