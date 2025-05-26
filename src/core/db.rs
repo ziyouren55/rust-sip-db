@@ -3,16 +3,24 @@ use crate::core::error::DbError;
 use crate::core::storage::{Storage, file::FileStorage, memory::MemoryStorage};
 use crate::core::types::{Table, Column, DataType};
 use crate::core::transaction::Transaction;
-use crate::core::sql::{SqlParser, SqlExecutor};
+use crate::core::sql::{SqlParser, SqlExecutor, SqlStatement};
 
 pub enum StorageType {
     File(PathBuf),
     Memory,
 }
 
+// 错误显示模式
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ErrorDisplayMode {
+    Brief,    // 简略错误信息
+    Detailed, // 详细错误信息
+}
+
 pub struct Database {
     storage: Box<dyn Storage>,
     sql_parser: SqlParser,
+    error_mode: ErrorDisplayMode, // 错误显示模式
 }
 
 impl Database {
@@ -25,6 +33,34 @@ impl Database {
         Database { 
             storage,
             sql_parser: SqlParser::new(),
+            error_mode: ErrorDisplayMode::Brief, // 默认使用简略模式
+        }
+    }
+    
+    // 设置错误显示模式
+    pub fn set_error_mode(&mut self, mode: ErrorDisplayMode) {
+        self.error_mode = mode;
+    }
+    
+    // 获取当前错误显示模式
+    pub fn get_error_mode(&self) -> ErrorDisplayMode {
+        self.error_mode
+    }
+    
+    // 切换错误显示模式
+    pub fn toggle_error_mode(&mut self) -> ErrorDisplayMode {
+        self.error_mode = match self.error_mode {
+            ErrorDisplayMode::Brief => ErrorDisplayMode::Detailed,
+            ErrorDisplayMode::Detailed => ErrorDisplayMode::Brief,
+        };
+        self.error_mode
+    }
+    
+    // 根据当前模式格式化错误信息
+    pub fn format_error(&self, error: &DbError) -> String {
+        match self.error_mode {
+            ErrorDisplayMode::Brief => error.brief_message(),
+            ErrorDisplayMode::Detailed => error.detailed_message(),
         }
     }
 
@@ -33,6 +69,14 @@ impl Database {
         let statement = self.sql_parser.parse(sql)?;
         let mut executor = SqlExecutor::new(&mut *self.storage);
         executor.execute(statement)
+    }
+    
+    // 执行SQL并返回是否有输出
+    pub fn execute_sql_with_output(&mut self, sql: &str) -> Result<bool, DbError> {
+        let statement = self.sql_parser.parse(sql)?;
+        let mut executor = SqlExecutor::new(&mut *self.storage);
+        executor.execute(statement)?;
+        Ok(executor.has_output())
     }
 
     // 表操作

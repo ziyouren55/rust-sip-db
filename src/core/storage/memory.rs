@@ -55,6 +55,8 @@ impl Storage for MemoryStorage {
     fn insert_row(&mut self, table_name: &str, row: Vec<DataType>) -> Result<(), DbError> {
         let table = self.tables.get_mut(table_name)
             .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table_name)))?;
+        
+        // 直接调用insert_row，保留原始错误类型
         table.insert_row(row)?;
         Ok(())
     }

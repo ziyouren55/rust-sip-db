@@ -1,12 +1,18 @@
 pub mod core;
-pub mod cli;
 
-pub use core::db::{Database, StorageType};
+pub use core::db::{Database, StorageType, ErrorDisplayMode};
 use std::path::PathBuf;
-use std::io::{self, Write};
+use std::io::{self, Write, Cursor};
 use crate::core::error::DbError;
 
-/// 执行SQL语句的统一接口
+/// SQL执行结果结构体
+#[derive(Debug, Clone)]
+pub struct SqlResult {
+    pub success: bool,        // 执行是否成功
+    pub error_message: String, // 错误信息（如果有）
+}
+
+/// 执行SQL语句的带路径接口
 /// 
 /// # 参数
 /// * `sql_statement` - 要执行的SQL语句
@@ -14,7 +20,7 @@ use crate::core::error::DbError;
 /// 
 /// # 返回值
 /// * `bool` - 执行成功返回true，失败返回false
-pub fn execute_sql(sql_statement: &str, db_path: Option<PathBuf>) -> bool {
+fn execute_sql_with_path(sql_statement: &str, db_path: Option<PathBuf>) -> bool {
     // 创建数据库实例
     let storage_type = match db_path {
         Some(path) => StorageType::File(path),
@@ -22,12 +28,137 @@ pub fn execute_sql(sql_statement: &str, db_path: Option<PathBuf>) -> bool {
     };
     
     let mut db = Database::new(storage_type);
+    let mut success = true;
     
-    // 执行SQL语句
-    match db.execute_sql(sql_statement) {
-        Ok(_) => true,
-        Err(_) => false,
+    // 处理输入，移除注释
+    let cleaned_sql = remove_comments(sql_statement);
+    
+    // 分割多条SQL语句
+    let statements: Vec<String> = cleaned_sql.split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    
+    // 记录上一条是否有输出（用于判断是否需要添加空行）
+    let mut last_had_output = false;
+    // 记录是否执行了任何SELECT语句
+    let mut has_executed_select = false;
+    // 记录是否有任何表格输出
+    let mut has_table_output = false;
+    
+    // 依次执行每条语句
+    for stmt in statements {
+        if !stmt.is_empty() {
+            // 检查当前语句是否为SELECT语句
+            let is_select = stmt.trim_start().to_uppercase().starts_with("SELECT");
+            
+            if is_select {
+                has_executed_select = true;
+                
+                // 如果上一条也有输出，添加一个空行
+                if last_had_output {
+                    println!();
+                }
+            }
+            
+            match db.execute_sql_with_output(&format!("{};", stmt)) {
+                Ok(has_output) => {
+                    // 更新状态
+                    last_had_output = has_output;
+                    if has_output {
+                        has_table_output = true;
+                    }
+                },
+                Err(e) => {
+                    // 使用当前错误显示模式格式化错误信息并打印
+                    println!("{}", db.format_error(&e));
+                    success = false;
+                    last_had_output = false; // 执行失败，重置状态
+                }
+            }
+        }
     }
+    
+    // 如果执行了SELECT语句但没有输出
+    if has_executed_select && !has_table_output {
+        println!("There are no results to be displayed.");
+    }
+    
+    success
+}
+
+/// 移除SQL语句中的注释
+fn remove_comments(sql: &str) -> String {
+    let mut result = String::new();
+    let mut in_multi_comment = false;
+    let mut in_single_comment = false;
+    let mut in_string = false;
+    let mut string_quote = '\0'; // 存储字符串的引号类型（单引号或双引号）
+    let mut i = 0;
+    
+    let chars: Vec<char> = sql.chars().collect();
+    
+    while i < chars.len() {
+        let c = chars[i];
+        
+        // 检查是否在字符串中
+        if !in_single_comment && !in_multi_comment {
+            if (c == '\'' || c == '"') && (i == 0 || chars[i-1] != '\\') {
+                if !in_string {
+                    in_string = true;
+                    string_quote = c;
+                } else if c == string_quote {
+                    in_string = false;
+                }
+            }
+        }
+        
+        // 处理单行注释开始 --
+        if !in_string && !in_multi_comment && !in_single_comment && c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
+            in_single_comment = true;
+            i += 2;
+            continue;
+        }
+        
+        // 处理多行注释开始 /*
+        if !in_string && !in_single_comment && !in_multi_comment && c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            in_multi_comment = true;
+            i += 2;
+            continue;
+        }
+        
+        // 处理多行注释结束 */
+        if !in_string && !in_single_comment && in_multi_comment && c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
+            in_multi_comment = false;
+            i += 2;
+            continue;
+        }
+        
+        // 处理单行注释结束（遇到换行）
+        if in_single_comment && (c == '\n' || c == '\r') {
+            in_single_comment = false;
+        }
+        
+        // 只有不在注释中的内容才添加到结果中
+        if !in_single_comment && !in_multi_comment {
+            result.push(c);
+        }
+        
+        i += 1;
+    }
+    
+    result
+}
+
+/// 执行SQL语句的统一接口（使用内存存储）
+/// 
+/// # 参数
+/// * `sql_statement` - 要执行的SQL语句
+/// 
+/// # 返回值
+/// * `bool` - 执行成功返回true，失败返回false
+pub fn execute_sql(sql_statement: &str) -> bool {
+    execute_sql_with_path(sql_statement, None)
 }
 
 /// 获取默认数据库路径
@@ -38,6 +169,8 @@ pub fn get_default_db_path() -> PathBuf {
 
 /// 运行交互式Shell
 pub fn run_interactive_shell(db: &mut Database) -> Result<(), Box<dyn std::error::Error>> {
+    println!("输入 'toggle_error_mode' 切换错误显示模式");
+    
     // 用于缓存多行SQL语句
     let mut sql_buffer = String::new();
     // 记录提示符状态
@@ -71,6 +204,8 @@ pub fn run_interactive_shell(db: &mut Database) -> Result<(), Box<dyn std::error
                 println!("  save - 保存数据库");
                 println!("  load - 加载数据库");
                 println!("  clear - 清除当前SQL缓冲区");
+                println!("  toggle_error_mode - 切换错误显示模式（简略/详细）");
+                println!("  error_mode - 显示当前错误显示模式");
                 println!("SQL命令: (以分号结束)");
                 println!("  -- 这是SQL注释");
                 println!("  CREATE TABLE table_name (column1 type1, column2 type2, ...);");
@@ -80,6 +215,26 @@ pub fn run_interactive_shell(db: &mut Database) -> Result<(), Box<dyn std::error
                 println!("  UPDATE table_name SET column = value WHERE condition;");
                 println!("  DELETE FROM table_name WHERE condition;");
                 println!("  SELECT * FROM table_name WHERE condition;");
+                is_continuation = false;
+                sql_buffer.clear();
+                continue;
+            },
+            "toggle_error_mode" => {
+                let mode = db.toggle_error_mode();
+                match mode {
+                    crate::core::db::ErrorDisplayMode::Brief => println!("错误显示模式切换为: 简略"),
+                    crate::core::db::ErrorDisplayMode::Detailed => println!("错误显示模式切换为: 详细"),
+                }
+                is_continuation = false;
+                sql_buffer.clear();
+                continue;
+            },
+            "error_mode" => {
+                let mode = db.get_error_mode();
+                match mode {
+                    crate::core::db::ErrorDisplayMode::Brief => println!("当前错误显示模式: 简略"),
+                    crate::core::db::ErrorDisplayMode::Detailed => println!("当前错误显示模式: 详细"),
+                }
                 is_continuation = false;
                 sql_buffer.clear();
                 continue;
@@ -187,9 +342,11 @@ fn process_sql_statements(db: &mut Database, sql_buffer: &mut String, is_continu
     // 处理所有非空语句
     for (i, stmt) in statements.iter().enumerate() {
         if !stmt.is_empty() {
-            // println!("执行SQL: {}", stmt);
+            // 显示执行的SQL语句
+            println!("执行SQL: {}", stmt);
             if let Err(e) = db.execute_sql(&format!("{};", stmt)) {
-                println!("{}", e);
+                // 使用当前错误显示模式格式化错误信息
+                println!("{}", db.format_error(&e));
             }
         }
         
@@ -204,6 +361,6 @@ fn process_sql_statements(db: &mut Database, sql_buffer: &mut String, is_continu
     if ends_with_semicolon || sql_buffer.is_empty() {
         *is_continuation = false;
     }
-
+    
     Ok(())
 }

@@ -1,18 +1,28 @@
 use crate::core::error::DbError;
-use crate::core::types::{DataType, Table};
+use crate::core::types::{DataType, Table, TypeError};
 use crate::core::storage::Storage;
 use super::{SqlStatement, WhereClause, Operator, TableFormatter};
 
 pub struct SqlExecutor<'a> {
     storage: &'a mut dyn Storage,
+    has_output: bool,
 }
 
 impl<'a> SqlExecutor<'a> {
     pub fn new(storage: &'a mut dyn Storage) -> Self {
-        SqlExecutor { storage }
+        SqlExecutor { 
+            storage,
+            has_output: false,
+        }
+    }
+
+    pub fn has_output(&self) -> bool {
+        self.has_output
     }
 
     pub fn execute(&mut self, statement: SqlStatement) -> Result<(), DbError> {
+        self.has_output = false;
+        
         match statement {
             SqlStatement::CreateTable { name, columns } => {
                 let table = Table::new(name, columns);
@@ -51,16 +61,12 @@ impl<'a> SqlExecutor<'a> {
                 for (i, col) in table_columns.iter().enumerate() {
                     // 检查主键
                     if col.primary_key && matches!(values[i], DataType::Null) {
-                        return Err(DbError::SqlError(
-                            format!("主键列 {} 不能为NULL", col.name)
-                        ));
+                        return Err(DbError::TypeError(TypeError::NullValue(col.name.clone())));
                     }
                     
                     // 检查非空约束
                     if !col.nullable && matches!(values[i], DataType::Null) {
-                        return Err(DbError::SqlError(
-                            format!("列 {} 不允许为NULL", col.name)
-                        ));
+                        return Err(DbError::TypeError(TypeError::NullValue(col.name.clone())));
                     }
                 }
                 
@@ -88,16 +94,12 @@ impl<'a> SqlExecutor<'a> {
                     for (i, col) in table_columns.iter().enumerate() {
                         // 检查主键
                         if col.primary_key && matches!(values[i], DataType::Null) {
-                            return Err(DbError::SqlError(
-                                format!("主键列 {} 不能为NULL", col.name)
-                            ));
+                            return Err(DbError::TypeError(TypeError::NullValue(col.name.clone())));
                         }
                         
                         // 检查非空约束
                         if !col.nullable && matches!(values[i], DataType::Null) {
-                            return Err(DbError::SqlError(
-                                format!("列 {} 不允许为NULL", col.name)
-                            ));
+                            return Err(DbError::TypeError(TypeError::NullValue(col.name.clone())));
                         }
                     }
                     
@@ -144,16 +146,12 @@ impl<'a> SqlExecutor<'a> {
                     for (i, col) in table_columns.iter().enumerate() {
                         // 检查非空约束
                         if !col.nullable && matches!(full_row[i], DataType::Null) {
-                            return Err(DbError::SqlError(
-                                format!("列 {} 不允许为NULL", col.name)
-                            ));
+                            return Err(DbError::TypeError(TypeError::NullValue(col.name.clone())));
                         }
                         
                         // 检查主键
                         if col.primary_key && matches!(full_row[i], DataType::Null) {
-                            return Err(DbError::SqlError(
-                                format!("主键列 {} 不能为NULL", col.name)
-                            ));
+                            return Err(DbError::TypeError(TypeError::NullValue(col.name.clone())));
                         }
                     }
                     
@@ -182,6 +180,8 @@ impl<'a> SqlExecutor<'a> {
                 // 将结果格式化为表格
                 let formatted_table = TableFormatter::format_table(&headers, &[results]);
                 print!("{}", formatted_table);
+                
+                self.has_output = true;
                 
                 Ok(())
             }
@@ -219,8 +219,9 @@ impl<'a> SqlExecutor<'a> {
                 if !selected_rows.is_empty() {
                     let formatted_table = TableFormatter::format_table(&headers, &selected_rows);
                     print!("{}", formatted_table);
+                    self.has_output = true;
                 } else {
-                    println!("查询结果为空");
+                    // 对于空结果集，不输出任何信息，改由外部统一处理
                 }
                 Ok(())
             }
@@ -312,8 +313,9 @@ impl<'a> SqlExecutor<'a> {
                 if !selected_rows.is_empty() {
                     let formatted_table = TableFormatter::format_table(&display_columns, &selected_rows);
                     print!("{}", formatted_table);
+                    self.has_output = true;
                 } else {
-                    println!("查询结果为空");
+                    // 对于空结果集，不输出任何信息，改由外部统一处理
                 }
                 Ok(())
             }

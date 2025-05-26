@@ -44,7 +44,7 @@ pub enum TypeError {
         actual_length: usize,
     },
     
-    #[error("Field '{0}' doesn't have a default value")]
+    #[error("Error: Field '{0}' doesn't have a default value")]
     NullValue(String),
 
     #[error("Error: Duplicate entry '{0}' for key 'PRIMARY'")]
