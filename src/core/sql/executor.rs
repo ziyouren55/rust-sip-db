@@ -21,8 +21,203 @@ impl<'a> SqlExecutor<'a> {
             SqlStatement::DropTable { name } => {
                 self.storage.drop_table(&name)
             }
+            SqlStatement::DropTables { names } => {
+                // 依次删除每个表
+                for name in names {
+                    // 如果某个表不存在，记录错误但继续处理其它表
+                    if let Err(err) = self.storage.drop_table(&name) {
+                        eprintln!("删除表 {} 时出错: {}", name, err);
+                    }
+                }
+                Ok(())
+            }
             SqlStatement::Insert { table, values } => {
+                // 获取表结构以检查主键
+                let table_struct = self.storage.get_table(&table)?
+                    .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table)))?;
+                
+                // 克隆表结构相关信息，避免借用冲突
+                let table_columns = table_struct.columns.clone();
+                
+                // 检查值的数量是否与表列数匹配
+                if values.len() != table_columns.len() {
+                    return Err(DbError::SqlError(format!(
+                        "值的数量({})与表列数({})不匹配", 
+                        values.len(), table_columns.len()
+                    )));
+                }
+                
+                // 检查主键和非空约束
+                for (i, col) in table_columns.iter().enumerate() {
+                    // 检查主键
+                    if col.primary_key && matches!(values[i], DataType::Null) {
+                        return Err(DbError::SqlError(
+                            format!("主键列 {} 不能为NULL", col.name)
+                        ));
+                    }
+                    
+                    // 检查非空约束
+                    if !col.nullable && matches!(values[i], DataType::Null) {
+                        return Err(DbError::SqlError(
+                            format!("列 {} 不允许为NULL", col.name)
+                        ));
+                    }
+                }
+                
                 self.storage.insert_row(&table, values)
+            }
+            SqlStatement::InsertMultiple { table, rows } => {
+                // 获取表结构以检查主键
+                let table_struct = self.storage.get_table(&table)?
+                    .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table)))?;
+                
+                // 克隆表结构相关信息，避免借用冲突
+                let table_columns = table_struct.columns.clone();
+                
+                // 依次插入每一行数据
+                for values in rows {
+                    // 检查值的数量是否与表列数匹配
+                    if values.len() != table_columns.len() {
+                        return Err(DbError::SqlError(format!(
+                            "值的数量({})与表列数({})不匹配", 
+                            values.len(), table_columns.len()
+                        )));
+                    }
+                    
+                    // 检查主键和非空约束
+                    for (i, col) in table_columns.iter().enumerate() {
+                        // 检查主键
+                        if col.primary_key && matches!(values[i], DataType::Null) {
+                            return Err(DbError::SqlError(
+                                format!("主键列 {} 不能为NULL", col.name)
+                            ));
+                        }
+                        
+                        // 检查非空约束
+                        if !col.nullable && matches!(values[i], DataType::Null) {
+                            return Err(DbError::SqlError(
+                                format!("列 {} 不允许为NULL", col.name)
+                            ));
+                        }
+                    }
+                    
+                    self.storage.insert_row(&table, values)?;
+                }
+                Ok(())
+            }
+            SqlStatement::InsertWithColumns { table, columns, rows } => {
+                // 获取表结构
+                let table_struct = self.storage.get_table(&table)?
+                    .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table)))?;
+                
+                // 克隆表结构相关信息，避免借用冲突
+                let table_columns = table_struct.columns.clone();
+                
+                // 检查列名是否存在于表中
+                for col in &columns {
+                    if !table_columns.iter().any(|c| &c.name == col) {
+                        return Err(DbError::SqlError(format!("列 {} 在表 {} 中不存在", col, table)));
+                    }
+                }
+                
+                // 处理每一行数据
+                for row_values in rows {
+                    // 检查值的数量是否与列名数量匹配
+                    if row_values.len() != columns.len() {
+                        return Err(DbError::SqlError(format!(
+                            "值的数量({})与列名数量({})不匹配", 
+                            row_values.len(), columns.len()
+                        )));
+                    }
+                    
+                    // 创建完整的行数据（按表的列顺序）
+                    let mut full_row = vec![DataType::Null; table_columns.len()];
+                    
+                    // 填充指定的列
+                    for (i, col) in columns.iter().enumerate() {
+                        if let Some(col_index) = table_columns.iter().position(|c| &c.name == col) {
+                            full_row[col_index] = row_values[i].clone();
+                        }
+                    }
+                    
+                    // 检查约束
+                    for (i, col) in table_columns.iter().enumerate() {
+                        // 检查非空约束
+                        if !col.nullable && matches!(full_row[i], DataType::Null) {
+                            return Err(DbError::SqlError(
+                                format!("列 {} 不允许为NULL", col.name)
+                            ));
+                        }
+                        
+                        // 检查主键
+                        if col.primary_key && matches!(full_row[i], DataType::Null) {
+                            return Err(DbError::SqlError(
+                                format!("主键列 {} 不能为NULL", col.name)
+                            ));
+                        }
+                    }
+                    
+                    // 插入行
+                    self.storage.insert_row(&table, full_row)?;
+                }
+                
+                Ok(())
+            }
+            SqlStatement::SelectExpression { expressions } => {
+                // 计算每个表达式的值
+                let mut results = Vec::new();
+                let mut headers = Vec::new();
+                
+                for expr in &expressions {
+                    // 计算表达式
+                    let result = self.evaluate_expression(expr, None)?;
+                    
+                    // 为表达式生成表头
+                    let header = self.expression_to_string(expr);
+                    
+                    results.push(result.to_string());
+                    headers.push(header);
+                }
+                
+                // 将结果格式化为表格
+                let formatted_table = TableFormatter::format_table(&headers, &[results]);
+                print!("{}", formatted_table);
+                
+                Ok(())
+            }
+            SqlStatement::SelectWithExpressions { expressions, table, where_clause } => {
+                let table_data = self.storage.get_table(&table)?
+                    .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table)))?;
+                
+                // 准备表头 - 从表达式生成
+                let mut headers = Vec::new();
+                for expr in &expressions {
+                    headers.push(self.expression_to_string(expr));
+                }
+                
+                // 收集满足条件的行数据
+                let mut selected_rows: Vec<Vec<String>> = Vec::new();
+                for row in &table_data.rows {
+                    if where_clause.is_none() || evaluate_where_clause(row, where_clause.as_ref().unwrap(), &table_data.columns)? {
+                        // 计算每个表达式的值
+                        let mut row_values = Vec::new();
+                        for expr in &expressions {
+                            // 计算表达式的值
+                            let result = self.evaluate_expression(expr, Some(row))?;
+                            row_values.push(result.to_string());
+                        }
+                        selected_rows.push(row_values);
+                    }
+                }
+                
+                // 使用TableFormatter格式化并输出结果
+                if !selected_rows.is_empty() {
+                    let formatted_table = TableFormatter::format_table(&headers, &selected_rows);
+                    print!("{}", formatted_table);
+                } else {
+                    println!("查询结果为空");
+                }
+                Ok(())
             }
             SqlStatement::Update { table, set, where_clause } => {
                 let table_data = self.storage.get_table_mut(&table)?
@@ -114,40 +309,174 @@ impl<'a> SqlExecutor<'a> {
             }
         }
     }
+
+    // 评估表达式的值
+    fn evaluate_expression(&self, expr: &super::Expression, row: Option<&[DataType]>) -> Result<DataType, DbError> {
+        match expr {
+            super::Expression::Literal(value) => Ok(value.clone()),
+            super::Expression::Column(name) => {
+                if let Some(row_data) = row {
+                    // 从表数据中获取列信息
+                    if name == "*" {
+                        return Err(DbError::SqlError("不能直接使用 * 作为表达式".to_string()));
+                    }
+                    
+                    // 获取当前表
+                    let table_name = if let Some(table_name) = name.split('.').next() {
+                        if name.contains('.') {
+                            table_name
+                        } else {
+                            // 没有表名前缀，无法确定列属于哪个表
+                            ""
+                        }
+                    } else {
+                        ""
+                    };
+                    
+                    // 获取列名
+                    let column_name = if name.contains('.') {
+                        name.split('.').nth(1).unwrap_or(name)
+                    } else {
+                        name
+                    };
+                    
+                    // 从存储中获取表定义
+                    if let Ok(Some(table)) = self.storage.get_table(table_name) {
+                        if let Some(col_index) = table.columns.iter().position(|col| &col.name == column_name) {
+                            if col_index < row_data.len() {
+                                return Ok(row_data[col_index].clone());
+                            }
+                        }
+                    }
+                    
+                    // 如果没有表名前缀，尝试直接从行数据中查找
+                    if table_name.is_empty() {
+                        // 从所有表中查找此列名
+                        for (i, _) in self.storage.get_tables()?.iter().enumerate() {
+                            if let Ok(Some(table)) = self.storage.get_table_by_index(i) {
+                                if let Some(col_index) = table.columns.iter().position(|col| &col.name == name) {
+                                    if col_index < row_data.len() {
+                                        return Ok(row_data[col_index].clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    Err(DbError::SqlError(format!("列 {} 未找到", name)))
+                } else {
+                    // 没有行上下文，无法获取列值
+                    Err(DbError::SqlError("无法获取列值，因为没有行上下文".to_string()))
+                }
+            },
+            super::Expression::Binary { left, operator, right } => {
+                let left_value = self.evaluate_expression(left, row)?;
+                let right_value = self.evaluate_expression(right, row)?;
+                
+                match (left_value, right_value) {
+                    (DataType::Int(a), DataType::Int(b)) => {
+                        let result = match operator {
+                            super::ArithmeticOperator::Add => a + b,
+                            super::ArithmeticOperator::Subtract => a - b,
+                            super::ArithmeticOperator::Multiply => a * b,
+                            super::ArithmeticOperator::Divide => {
+                                if b == 0 {
+                                    return Err(DbError::SqlError("除数不能为零".to_string()));
+                                }
+                                a / b
+                            },
+                        };
+                        Ok(DataType::Int(result))
+                    },
+                    // 可以添加更多类型组合的处理
+                    _ => Err(DbError::SqlError("不支持的操作数类型".to_string())),
+                }
+            },
+        }
+    }
+    
+    // 将表达式转换为字符串表示
+    fn expression_to_string(&self, expr: &super::Expression) -> String {
+        match expr {
+            super::Expression::Literal(value) => value.to_string(),
+            super::Expression::Column(name) => name.clone(),
+            super::Expression::Binary { left, operator, right } => {
+                let left_str = self.expression_to_string(left);
+                let right_str = self.expression_to_string(right);
+                let op_str = match operator {
+                    super::ArithmeticOperator::Add => "+",
+                    super::ArithmeticOperator::Subtract => "-",
+                    super::ArithmeticOperator::Multiply => "*",
+                    super::ArithmeticOperator::Divide => "/",
+                };
+                format!("{} {} {}", left_str, op_str, right_str)
+            },
+        }
+    }
 }
 
 fn evaluate_where_clause(row: &[DataType], where_clause: &WhereClause, columns: &[crate::core::types::Column]) -> Result<bool, DbError> {
-    let column_index = columns.iter()
-        .position(|col| col.name == where_clause.column)
-        .ok_or_else(|| DbError::SqlError(format!("列 {} 不存在", where_clause.column)))?;
+    match where_clause {
+        WhereClause::Simple { column, operator, value } => {
+            let column_index = columns.iter()
+                .position(|col| col.name == *column)
+                .ok_or_else(|| DbError::SqlError(format!("列 {} 不存在", column)))?;
 
-    let value = &row[column_index];
-    let compare_value = &where_clause.value;
+            let row_value = &row[column_index];
+            let compare_value = value;
 
-    let result = match where_clause.operator {
-        Operator::Eq => value == compare_value,
-        Operator::Ne => value != compare_value,
-        Operator::Gt => match (value, compare_value) {
-            (DataType::Int(a), DataType::Int(b)) => a > b,
-            (DataType::Varchar(a), DataType::Varchar(b)) => a > b,
-            _ => return Err(DbError::SqlError("类型不匹配".to_string())),
-        },
-        Operator::Lt => match (value, compare_value) {
-            (DataType::Int(a), DataType::Int(b)) => a < b,
-            (DataType::Varchar(a), DataType::Varchar(b)) => a < b,
-            _ => return Err(DbError::SqlError("类型不匹配".to_string())),
-        },
-        Operator::Ge => match (value, compare_value) {
-            (DataType::Int(a), DataType::Int(b)) => a >= b,
-            (DataType::Varchar(a), DataType::Varchar(b)) => a >= b,
-            _ => return Err(DbError::SqlError("类型不匹配".to_string())),
-        },
-        Operator::Le => match (value, compare_value) {
-            (DataType::Int(a), DataType::Int(b)) => a <= b,
-            (DataType::Varchar(a), DataType::Varchar(b)) => a <= b,
-            _ => return Err(DbError::SqlError("类型不匹配".to_string())),
-        },
-    };
+            let result = match operator {
+                Operator::Eq => row_value == compare_value,
+                Operator::Ne => row_value != compare_value,
+                Operator::Gt => match (row_value, compare_value) {
+                    (DataType::Int(a), DataType::Int(b)) => a > b,
+                    (DataType::Varchar(a), DataType::Varchar(b)) => a > b,
+                    _ => return Err(DbError::SqlError("类型不匹配".to_string())),
+                },
+                Operator::Lt => match (row_value, compare_value) {
+                    (DataType::Int(a), DataType::Int(b)) => a < b,
+                    (DataType::Varchar(a), DataType::Varchar(b)) => a < b,
+                    _ => return Err(DbError::SqlError("类型不匹配".to_string())),
+                },
+                Operator::Ge => match (row_value, compare_value) {
+                    (DataType::Int(a), DataType::Int(b)) => a >= b,
+                    (DataType::Varchar(a), DataType::Varchar(b)) => a >= b,
+                    _ => return Err(DbError::SqlError("类型不匹配".to_string())),
+                },
+                Operator::Le => match (row_value, compare_value) {
+                    (DataType::Int(a), DataType::Int(b)) => a <= b,
+                    (DataType::Varchar(a), DataType::Varchar(b)) => a <= b,
+                    _ => return Err(DbError::SqlError("类型不匹配".to_string())),
+                },
+                Operator::IsNull => matches!(row_value, DataType::Null),
+                Operator::IsNotNull => !matches!(row_value, DataType::Null),
+            };
 
-    Ok(result)
+            Ok(result)
+        },
+        WhereClause::And { left, right } => {
+            // 对于 AND，两边都需要为真
+            let left_result = evaluate_where_clause(row, left, columns)?;
+            
+            // 短路求值：如果左边为假，直接返回假
+            if !left_result {
+                return Ok(false);
+            }
+            
+            let right_result = evaluate_where_clause(row, right, columns)?;
+            Ok(left_result && right_result)
+        },
+        WhereClause::Or { left, right } => {
+            // 对于 OR，只需一边为真
+            let left_result = evaluate_where_clause(row, left, columns)?;
+            
+            // 短路求值：如果左边为真，直接返回真
+            if left_result {
+                return Ok(true);
+            }
+            
+            let right_result = evaluate_where_clause(row, right, columns)?;
+            Ok(left_result || right_result)
+        },
+    }
 } 

@@ -2,6 +2,7 @@
 name = "simple_db"
 version = "0.1.0"
 edition = "2021"
+default-run = "simple_db"
 
 [dependencies]
 anyhow = "1.0"  # 错误处理

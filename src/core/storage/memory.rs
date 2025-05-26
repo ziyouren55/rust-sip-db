@@ -44,6 +44,14 @@ impl Storage for MemoryStorage {
         Ok(self.tables.keys().cloned().collect())
     }
 
+    fn get_tables(&self) -> Result<Vec<&Table>, DbError> {
+        Ok(self.tables.values().collect())
+    }
+
+    fn get_table_by_index(&self, index: usize) -> Result<Option<&Table>, DbError> {
+        Ok(self.tables.values().nth(index))
+    }
+
     fn insert_row(&mut self, table_name: &str, row: Vec<DataType>) -> Result<(), DbError> {
         let table = self.tables.get_mut(table_name)
             .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table_name)))?;

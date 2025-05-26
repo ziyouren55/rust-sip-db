@@ -12,6 +12,8 @@ pub trait Storage {
     fn get_table(&self, table_name: &str) -> Result<Option<&Table>, DbError>;
     fn get_table_mut(&mut self, table_name: &str) -> Result<Option<&mut Table>, DbError>;
     fn list_tables(&self) -> Result<Vec<String>, DbError>;
+    fn get_tables(&self) -> Result<Vec<&Table>, DbError>;
+    fn get_table_by_index(&self, index: usize) -> Result<Option<&Table>, DbError>;
 
     // 数据操作
     fn insert_row(&mut self, table_name: &str, row: Vec<crate::core::types::DataType>) -> Result<(), DbError>;

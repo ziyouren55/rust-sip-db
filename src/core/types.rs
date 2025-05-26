@@ -44,11 +44,11 @@ pub enum TypeError {
         actual_length: usize,
     },
     
-    #[error("非空字段不能为null")]
-    NullValue,
+    #[error("{0}")]
+    NullValue(String),
 
-    #[error("主键冲突")]
-    PrimaryKeyViolation,
+    #[error("{0}")]
+    PrimaryKeyViolation(String),
 }
 
 impl DataType {
@@ -98,7 +98,9 @@ impl Table {
             // 检查是否有重复的主键值
             for existing_row in &self.rows {
                 if &existing_row[pk_index] == pk_value {
-                    return Err(TypeError::PrimaryKeyViolation);
+                    return Err(TypeError::PrimaryKeyViolation(format!(
+                        "主键值 {} 已存在", pk_value
+                    )));
                 }
             }
         }
@@ -122,8 +124,18 @@ impl Table {
                 });
             }
 
+            // 检查非空约束
             if !column.nullable && matches!(value, DataType::Null) {
-                return Err(TypeError::NullValue);
+                return Err(TypeError::NullValue(format!(
+                    "列 {} 不允许为NULL", column.name
+                )));
+            }
+            
+            // 检查主键不能为NULL
+            if column.primary_key && matches!(value, DataType::Null) {
+                return Err(TypeError::PrimaryKeyViolation(format!(
+                    "主键列 {} 不能为NULL", column.name
+                )));
             }
         }
         

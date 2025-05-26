@@ -17,6 +17,10 @@ pub enum Token {
     Select,
     Primary,
     Key,
+    And,    // 新增 AND 关键字
+    Or,     // 新增 OR 关键字
+    Is,     // 新增 IS 关键字
+    Null,   // 新增 NULL 关键字
     // 操作符
     Eq,    // =
     Ne,    // !=
@@ -24,6 +28,11 @@ pub enum Token {
     Lt,    // <
     Ge,    // >=
     Le,    // <=
+    // 算术运算符
+    Plus,     // +
+    Minus,    // -
+    Asterisk, // * (也用于SELECT * 查询)
+    Slash,    // /
     // 分隔符
     Comma,     // ,
     Semicolon, // ;
@@ -36,6 +45,7 @@ pub enum Token {
     Number(i32),
     // 其他
     Comment(String),
+    MultiLineComment(String), // 新增的多行注释类型
 }
 
 pub struct Lexer {
@@ -57,7 +67,11 @@ impl Lexer {
         let mut tokens = Vec::new();
 
         while self.position < self.input.len() {
-            let c = self.input.chars().nth(self.position).unwrap();
+            // 安全地获取当前字符，避免使用unwrap
+            let c = match self.input.chars().nth(self.position) {
+                Some(ch) => ch,
+                None => break, // 如果没有字符了，结束循环
+            };
             
             // 跳过空白字符
             if c.is_whitespace() {
@@ -65,11 +79,19 @@ impl Lexer {
                 continue;
             }
 
-            // 处理注释
+            // 处理单行注释
             if c == '-' && self.peek() == Some('-') {
                 self.position += 2;
                 let comment = self.read_until('\n');
                 tokens.push(Token::Comment(comment));
+                continue;
+            }
+
+            // 处理多行注释 /* ... */
+            if c == '/' && self.peek() == Some('*') {
+                self.position += 2; // 跳过 /*
+                let comment = self.read_until_multiline_comment_end();
+                tokens.push(Token::MultiLineComment(comment));
                 continue;
             }
 
@@ -91,6 +113,10 @@ impl Lexer {
                     "SELECT" => Token::Select,
                     "PRIMARY" => Token::Primary,
                     "KEY" => Token::Key,
+                    "AND" => Token::And,    // 新增 AND 关键字识别
+                    "OR" => Token::Or,      // 新增 OR 关键字识别
+                    "IS" => Token::Is,      // 新增 IS 关键字识别
+                    "NULL" => Token::Null,  // 新增 NULL 关键字识别
                     _ => Token::Identifier(identifier),
                 };
                 tokens.push(token);
@@ -104,11 +130,15 @@ impl Lexer {
                 continue;
             }
 
-            // 处理字符串
-            if c == '\'' {
+            // 处理字符串 - 支持单引号和双引号
+            if c == '\'' || c == '"' {
+                let quote_char = c; // 记住是哪种引号
                 self.position += 1;
-                let string = self.read_until('\'');
+                let string = self.read_until(quote_char);
+                // 安全地移动位置，避免越界
+                if self.position < self.input.len() {
                 self.position += 1;
+                }
                 tokens.push(Token::String(string));
                 continue;
             }
@@ -134,7 +164,10 @@ impl Lexer {
                 ';' => Token::Semicolon,
                 '(' => Token::LParen,
                 ')' => Token::RParen,
-                '*' => Token::Star,
+                '*' => Token::Asterisk,
+                '+' => Token::Plus,
+                '-' => Token::Minus,
+                '/' => Token::Slash,
                 _ => return Err(DbError::SqlError(format!("未知字符: {}", c))),
             };
             tokens.push(token);
@@ -155,7 +188,12 @@ impl Lexer {
     fn read_identifier(&mut self) -> String {
         let mut identifier = String::new();
         while self.position < self.input.len() {
-            let c = self.input.chars().nth(self.position).unwrap();
+            // 安全地获取当前字符
+            let c = match self.input.chars().nth(self.position) {
+                Some(ch) => ch,
+                None => break, // 如果没有更多字符，跳出循环
+            };
+            
             if c.is_alphanumeric() || c == '_' {
                 identifier.push(c);
                 self.position += 1;
@@ -169,7 +207,12 @@ impl Lexer {
     fn read_number(&mut self) -> i32 {
         let mut number = String::new();
         while self.position < self.input.len() {
-            let c = self.input.chars().nth(self.position).unwrap();
+            // 安全地获取当前字符
+            let c = match self.input.chars().nth(self.position) {
+                Some(ch) => ch,
+                None => break, // 如果没有更多字符，跳出循环
+            };
+            
             if c.is_digit(10) {
                 number.push(c);
                 self.position += 1;
@@ -177,19 +220,45 @@ impl Lexer {
                 break;
             }
         }
-        number.parse().unwrap()
+        // 安全地解析数字，如果解析失败返回0（实际应用中可能需要更好的错误处理）
+        number.parse().unwrap_or(0)
     }
 
     fn read_until(&mut self, end: char) -> String {
         let mut result = String::new();
         while self.position < self.input.len() {
-            let c = self.input.chars().nth(self.position).unwrap();
+            // 安全地获取当前字符
+            let c = match self.input.chars().nth(self.position) {
+                Some(ch) => ch,
+                None => break, // 如果没有更多字符，跳出循环
+            };
+            
             if c == end {
                 break;
             }
             result.push(c);
             self.position += 1;
         }
+        result
+    }
+    
+    // 读取多行注释，直到遇到 */
+    fn read_until_multiline_comment_end(&mut self) -> String {
+        let mut result = String::new();
+        
+        while self.position + 1 < self.input.len() {
+            let c = self.input.chars().nth(self.position).unwrap_or(' ');
+            let next = self.input.chars().nth(self.position + 1).unwrap_or(' ');
+            
+            if c == '*' && next == '/' {
+                self.position += 2; // 跳过 */
+                break;
+            }
+            
+            result.push(c);
+            self.position += 1;
+        }
+        
         result
     }
 } 

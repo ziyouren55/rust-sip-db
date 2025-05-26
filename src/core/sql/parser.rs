@@ -17,19 +17,45 @@ impl Parser {
     }
 
     pub fn parse(&mut self, tokens: Vec<Token>) -> Result<SqlStatement, DbError> {
-        self.tokens = tokens;
+        // 过滤掉所有注释Token
+        self.tokens = tokens.into_iter()
+            .filter(|token| !matches!(token, Token::Comment(_) | Token::MultiLineComment(_)))
+            .collect();
         self.position = 0;
+        
+        // 如果过滤后没有Token，返回空语句错误
+        if self.tokens.is_empty() {
+            return Err(DbError::SqlError("空语句或仅包含注释".to_string()));
+        }
+        
         self.parse_statement()
     }
 
     fn parse_statement(&mut self) -> Result<SqlStatement, DbError> {
-        match self.peek() {
+        let current_token = self.peek().cloned();
+        
+        match current_token {
             Some(Token::Create) => self.parse_create_table(),
             Some(Token::Drop) => self.parse_drop_table(),
             Some(Token::Insert) => self.parse_insert(),
             Some(Token::Update) => self.parse_update(),
             Some(Token::Delete) => self.parse_delete(),
-            Some(Token::Select) => self.parse_select(),
+            Some(Token::Select) => {
+                // 检查下一个非空位置的 token
+                self.next(); // 消费 SELECT
+                
+                // 保存当前位置以便回溯
+                let current_position = self.position;
+                
+                // 尝试解析表达式查询
+                if let Ok(expr_stmt) = self.parse_expression_select() {
+                    return Ok(expr_stmt);
+                }
+                
+                // 如果不是表达式查询，恢复位置并解析普通查询
+                self.position = current_position;
+                self.parse_normal_select()
+            },
             Some(token) => Err(DbError::SqlError(format!("意外的语句开始: {:?}", token))),
             None => Err(DbError::SqlError("空语句".to_string())),
         }
@@ -121,14 +147,33 @@ impl Parser {
     }
 
     fn parse_nullable(&mut self) -> Result<bool, DbError> {
-        match self.peek() {
-            Some(Token::Identifier(ident)) if ident.to_uppercase() == "NOT" => {
-                self.next();
-                self.expect(Token::Identifier("NULL".to_string()))?;
-                Ok(false)
+        // 检查是否有NOT NULL
+        if let Some(Token::Identifier(ident)) = self.peek() {
+            if ident.to_uppercase() == "NOT" {
+                self.next(); // 消费NOT
+                
+                // 期望后面是NULL
+                match self.next() {
+                    Some(Token::Null) => return Ok(false),
+                    Some(Token::Identifier(ident)) if ident.to_uppercase() == "NULL" => return Ok(false),
+                    _ => return Err(DbError::SqlError("期望NULL关键字".to_string())),
+                }
             }
-            _ => Ok(true),
         }
+        
+        // 检查是否有明确的NULL
+        if let Some(Token::Null) = self.peek() {
+            self.next(); // 消费NULL
+            return Ok(true);
+        } else if let Some(Token::Identifier(ident)) = self.peek() {
+            if ident.to_uppercase() == "NULL" {
+                self.next(); // 消费NULL
+                return Ok(true);
+            }
+        }
+        
+        // 如果没有明确指定，默认为可空
+        Ok(true)
     }
 
     fn parse_primary_key(&mut self) -> Result<bool, DbError> {
@@ -145,12 +190,32 @@ impl Parser {
         self.expect(Token::Drop)?;
         self.expect(Token::Table)?;
         
+        // 解析第一个表名
         let name = match self.next() {
             Some(Token::Identifier(name)) => name,
             _ => return Err(DbError::SqlError("期望表名".to_string())),
         };
 
-        Ok(SqlStatement::DropTable { name })
+        // 检查是否有更多表名（以逗号分隔）
+        if let Some(&Token::Comma) = self.peek() {
+            // 有多个表名，转为DropTables处理
+            let mut names = vec![name];
+            
+            // 解析剩余表名
+            while let Some(&Token::Comma) = self.peek() {
+                self.next(); // 消费逗号
+                
+                match self.next() {
+                    Some(Token::Identifier(name)) => names.push(name),
+                    _ => return Err(DbError::SqlError("期望表名".to_string())),
+                }
+            }
+            
+            Ok(SqlStatement::DropTables { names })
+        } else {
+            // 只有一个表名
+            Ok(SqlStatement::DropTable { name })
+        }
     }
 
     fn parse_insert(&mut self) -> Result<SqlStatement, DbError> {
@@ -162,15 +227,49 @@ impl Parser {
             _ => return Err(DbError::SqlError("期望表名".to_string())),
         };
 
+        // 检查是否有列名列表
+        let columns = if let Some(&Token::LParen) = self.peek() {
+            self.next(); // 消费左括号
+            
+            let mut columns = Vec::new();
+            loop {
+                match self.next() {
+                    Some(Token::Identifier(col_name)) => columns.push(col_name),
+                    _ => return Err(DbError::SqlError("期望列名".to_string())),
+                }
+                
+                match self.peek() {
+                    Some(&Token::Comma) => {
+                        self.next(); // 消费逗号
+                        continue;
+                    }
+                    Some(&Token::RParen) => {
+                        self.next(); // 消费右括号
+                        break;
+                    }
+                    _ => return Err(DbError::SqlError("期望逗号或右括号".to_string())),
+                }
+            }
+            
+            Some(columns)
+        } else {
+            None
+        };
+
         self.expect(Token::Values)?;
-        self.expect(Token::LParen)?;
         
-        let mut values = Vec::new();
+        // 检查是否有多行值
+        let mut rows = Vec::new();
+        let mut first_row = Vec::new();
+        
+        // 处理第一行
+        self.expect(Token::LParen)?;
         loop {
             let value = self.parse_value()?;
-            values.push(value);
+            first_row.push(value);
 
-            match self.peek() {
+            let next_token = self.peek().cloned();
+            match next_token {
                 Some(Token::Comma) => {
                     self.next();
                     continue;
@@ -182,14 +281,73 @@ impl Parser {
                 _ => return Err(DbError::SqlError("期望逗号或右括号".to_string())),
             }
         }
+        rows.push(first_row);
+        
+        // 检查是否是多行插入
+        let next_token = self.peek().cloned();
+        if let Some(Token::Comma) = next_token {
+            // 多行插入
+            while let Some(Token::Comma) = self.peek().cloned() {
+                self.next(); // 消费逗号
+                
+                // 可能有些空白，但我们期望接下来是左括号
+                let next_token = self.peek().cloned();
+                if let Some(Token::LParen) = next_token {
+                    self.next(); // 消费左括号
+                    
+                    let mut row_values = Vec::new();
+                    loop {
+                        let value = self.parse_value()?;
+                        row_values.push(value);
 
-        Ok(SqlStatement::Insert { table, values })
+                        let next_token = self.peek().cloned();
+                        match next_token {
+                            Some(Token::Comma) => {
+                                self.next();
+                                continue;
+                            }
+                            Some(Token::RParen) => {
+                                self.next();
+                                break;
+                            }
+                            _ => return Err(DbError::SqlError("期望逗号或右括号".to_string())),
+                        }
+                    }
+                    rows.push(row_values);
+                } else {
+                    return Err(DbError::SqlError("多行插入时期望左括号".to_string()));
+                }
+            }
+            
+            // 返回带列名的多行插入或普通多行插入
+            if let Some(cols) = columns {
+                return Ok(SqlStatement::InsertWithColumns { 
+                    table, 
+                    columns: cols, 
+                    rows 
+                });
+            } else {
+                return Ok(SqlStatement::InsertMultiple { table, rows });
+            }
+        } else {
+            // 单行插入
+            if let Some(cols) = columns {
+                return Ok(SqlStatement::InsertWithColumns { 
+                    table, 
+                    columns: cols, 
+                    rows: vec![rows[0].clone()] 
+                });
+            } else {
+                return Ok(SqlStatement::Insert { table, values: rows[0].clone() });
+            }
+        }
     }
 
     fn parse_value(&mut self) -> Result<DataType, DbError> {
         match self.next() {
             Some(Token::Number(n)) => Ok(DataType::Int(n)),
             Some(Token::String(s)) => Ok(DataType::Varchar(s)),
+            Some(Token::Null) => Ok(DataType::Null),
             Some(Token::Identifier(ident)) if ident.to_uppercase() == "NULL" => Ok(DataType::Null),
             _ => Err(DbError::SqlError("期望值".to_string())),
         }
@@ -253,33 +411,166 @@ impl Parser {
         Ok(SqlStatement::Delete { table, where_clause })
     }
 
-    fn parse_select(&mut self) -> Result<SqlStatement, DbError> {
-        self.expect(Token::Select)?;
+    fn parse_expression_select(&mut self) -> Result<SqlStatement, DbError> {
+        let mut expressions = Vec::new();
         
-        let mut columns = Vec::new();
+        // 解析第一个表达式
+        let expr = self.parse_expression()?;
+        expressions.push(expr);
         
+        // 检查是否有更多的表达式 (以逗号分隔)
+        while let Some(Token::Comma) = self.peek().cloned() {
+            self.next(); // 消费逗号
+            let expr = self.parse_expression()?;
+            expressions.push(expr);
+        }
+        
+        // 表达式查询不能有 FROM 子句
+        if let Some(Token::From) = self.peek().cloned() {
+            return Err(DbError::SqlError("表达式查询不能有 FROM 子句".to_string()));
+        }
+        
+        Ok(SqlStatement::SelectExpression { expressions })
+    }
+    
+    fn parse_expression(&mut self) -> Result<super::Expression, DbError> {
+        self.parse_binary_expression()
+    }
+    
+    fn parse_binary_expression(&mut self) -> Result<super::Expression, DbError> {
+        let left = self.parse_primary_expression()?;
+        
+        // 检查是否有运算符，先获取token的拷贝避免借用冲突
+        let next_token = self.peek().cloned();
+        
+        match next_token {
+            Some(Token::Plus) => {
+                self.next(); // 消费 +
+                let right = self.parse_expression()?;
+                Ok(super::Expression::Binary {
+                    left: Box::new(left),
+                    operator: super::ArithmeticOperator::Add,
+                    right: Box::new(right),
+                })
+            },
+            Some(Token::Minus) => {
+                self.next(); // 消费 -
+                let right = self.parse_expression()?;
+                Ok(super::Expression::Binary {
+                    left: Box::new(left),
+                    operator: super::ArithmeticOperator::Subtract,
+                    right: Box::new(right),
+                })
+            },
+            Some(Token::Asterisk) => {
+                self.next(); // 消费 *
+                let right = self.parse_expression()?;
+                Ok(super::Expression::Binary {
+                    left: Box::new(left),
+                    operator: super::ArithmeticOperator::Multiply,
+                    right: Box::new(right),
+                })
+            },
+            Some(Token::Slash) => {
+                self.next(); // 消费 /
+                let right = self.parse_expression()?;
+                Ok(super::Expression::Binary {
+                    left: Box::new(left),
+                    operator: super::ArithmeticOperator::Divide,
+                    right: Box::new(right),
+                })
+            },
+            _ => Ok(left),
+        }
+    }
+    
+    fn parse_primary_expression(&mut self) -> Result<super::Expression, DbError> {
+        // 先获取当前token的拷贝而不是引用，避免借用冲突
+        let current_token = self.peek().cloned();
+        
+        match current_token {
+            Some(Token::Number(n)) => {
+                self.next(); // 消费数字
+                Ok(super::Expression::Literal(crate::core::types::DataType::Int(n)))
+            },
+            Some(Token::String(s)) => {
+                self.next(); // 消费字符串
+                Ok(super::Expression::Literal(crate::core::types::DataType::Varchar(s)))
+            },
+            Some(Token::Identifier(name)) => {
+                self.next(); // 消费标识符
+                Ok(super::Expression::Column(name))
+            },
+            Some(Token::LParen) => {
+                self.next(); // 消费左括号
+                let expr = self.parse_expression()?;
+                self.expect(Token::RParen)?;
+                Ok(expr)
+            },
+            _ => Err(DbError::SqlError("期望表达式".to_string())),
+        }
+    }
+    
+    fn parse_normal_select(&mut self) -> Result<SqlStatement, DbError> {
         // 检查是否为星号(*)
-        if let Some(&Token::Star) = self.peek() {
+        if let Some(&Token::Asterisk) = self.peek() {
             self.next(); // 消耗星号
-            columns.push("*".to_string()); // 使用星号字符串表示所有列
-        } else {
-            // 常规列名列表处理
-            loop {
-                let column = match self.next() {
-                    Some(Token::Identifier(name)) => name,
-                    Some(Token::String(s)) => s,
-                    _ => return Err(DbError::SqlError("期望列名或字符串".to_string())),
-                };
-                columns.push(column);
+            
+            self.expect(Token::From)?;
+            let table = match self.next() {
+                Some(Token::Identifier(name)) => name,
+                _ => return Err(DbError::SqlError("期望表名".to_string())),
+            };
 
-                match self.peek() {
-                    Some(&Token::Comma) => {
-                        self.next();
-                        continue;
-                    }
-                    Some(&Token::From) => break,
-                    _ => return Err(DbError::SqlError("期望逗号或FROM子句".to_string())),
+            let where_clause = if matches!(self.peek(), Some(&Token::Where)) {
+                Some(self.parse_where_clause()?)
+            } else {
+                None
+            };
+
+            return Ok(SqlStatement::Select { 
+                columns: vec!["*".to_string()], 
+                table, 
+                where_clause 
+            });
+        }
+        
+        // 解析列表达式或列名
+        let mut columns = Vec::new();
+        let mut expressions = Vec::new();
+        let mut has_expression = false;
+        
+        loop {
+            // 保存当前位置以便回溯
+            let current_position = self.position;
+            
+            // 尝试解析为表达式
+            match self.parse_expression() {
+                Ok(expr) => {
+                    has_expression = true;
+                    expressions.push(expr);
+                },
+                Err(_) => {
+                    // 解析失败，回溯位置
+                    self.position = current_position;
+                    
+                    // 尝试解析为普通列名
+                    let column = match self.next() {
+                        Some(Token::Identifier(name)) => name,
+                        Some(Token::String(s)) => s,
+                        _ => return Err(DbError::SqlError("期望列名或表达式".to_string())),
+                    };
+                    columns.push(column);
                 }
+            }
+
+            match self.peek() {
+                Some(&Token::Comma) => {
+                    self.next();
+                    continue;
+                }
+                Some(&Token::From) => break,
+                _ => return Err(DbError::SqlError("期望逗号或FROM子句".to_string())),
             }
         }
 
@@ -296,16 +587,116 @@ impl Parser {
             None
         };
 
-        Ok(SqlStatement::Select { columns, table, where_clause })
+        // 如果有表达式，将所有列名转换为Column表达式
+        if has_expression {
+            // 将普通列名转换为Column表达式
+            for col in columns {
+                expressions.push(super::Expression::Column(col));
+            }
+            
+            Ok(SqlStatement::SelectWithExpressions { 
+                expressions, 
+                table, 
+                where_clause 
+            })
+        } else {
+            Ok(SqlStatement::Select { 
+                columns, 
+                table, 
+                where_clause 
+            })
+        }
     }
 
     fn parse_where_clause(&mut self) -> Result<super::WhereClause, DbError> {
         self.expect(Token::Where)?;
         
+        self.parse_or_condition()
+    }
+
+    fn parse_or_condition(&mut self) -> Result<super::WhereClause, DbError> {
+        let left = self.parse_and_condition()?;
+
+        // 检查是否有 OR 关键字
+        if let Some(&Token::Or) = self.peek() {
+            self.next(); // 消费 OR
+            let right = self.parse_or_condition()?;
+            return Ok(super::WhereClause::Or {
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+
+        Ok(left)
+    }
+
+    fn parse_and_condition(&mut self) -> Result<super::WhereClause, DbError> {
+        let left = self.parse_condition()?;
+
+        // 检查是否有 AND 关键字
+        if let Some(&Token::And) = self.peek() {
+            self.next(); // 消费 AND
+            let right = self.parse_and_condition()?;
+            return Ok(super::WhereClause::And {
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+
+        Ok(left)
+    }
+
+    fn parse_condition(&mut self) -> Result<super::WhereClause, DbError> {
+        // 处理括号中的条件
+        if let Some(&Token::LParen) = self.peek() {
+            self.next(); // 消费左括号
+            let condition = self.parse_or_condition()?;
+            self.expect(Token::RParen)?;
+            return Ok(condition);
+        }
+
+        // 解析简单条件
         let column = match self.next() {
             Some(Token::Identifier(name)) => name,
             _ => return Err(DbError::SqlError("期望列名".to_string())),
         };
+
+        // 处理IS NULL和IS NOT NULL的情况
+        if let Some(&Token::Is) = self.peek() {
+            self.next(); // 消费IS
+            
+            // 检查是否有NOT
+            let is_not = if let Some(&Token::Identifier(ref ident)) = self.peek() {
+                if ident.to_uppercase() == "NOT" {
+                    self.next(); // 消费NOT
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            
+            // 期望NULL
+            match self.next() {
+                Some(Token::Null) => {
+                    // 根据是否有NOT返回不同的操作符
+                    let operator = if is_not {
+                        super::Operator::IsNotNull
+                    } else {
+                        super::Operator::IsNull
+                    };
+                    
+                    // IS NULL条件不需要值，但为了保持一致性，使用Null
+                    return Ok(super::WhereClause::Simple { 
+                        column, 
+                        operator, 
+                        value: crate::core::types::DataType::Null 
+                    });
+                }
+                _ => return Err(DbError::SqlError("期望NULL关键字".to_string())),
+            }
+        }
 
         let operator = match self.next() {
             Some(Token::Eq) => super::Operator::Eq,
@@ -319,7 +710,7 @@ impl Parser {
 
         let value = self.parse_value()?;
 
-        Ok(super::WhereClause { column, operator, value })
+        Ok(super::WhereClause::Simple { column, operator, value })
     }
 
     fn expect(&mut self, expected: Token) -> Result<(), DbError> {

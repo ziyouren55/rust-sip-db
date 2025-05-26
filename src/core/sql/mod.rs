@@ -22,9 +22,21 @@ pub enum SqlStatement {
     DropTable {
         name: String,
     },
+    DropTables {
+        names: Vec<String>,
+    },
     Insert {
         table: String,
         values: Vec<DataType>,
+    },
+    InsertMultiple {
+        table: String,
+        rows: Vec<Vec<DataType>>,
+    },
+    InsertWithColumns {
+        table: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<DataType>>,
     },
     Update {
         table: String,
@@ -40,14 +52,32 @@ pub enum SqlStatement {
         table: String,
         where_clause: Option<WhereClause>,
     },
+    SelectExpression {
+        expressions: Vec<Expression>,
+    },
+    SelectWithExpressions {
+        expressions: Vec<Expression>,
+        table: String,
+        where_clause: Option<WhereClause>,
+    },
 }
 
 // WHERE子句
 #[derive(Debug)]
-pub struct WhereClause {
-    pub column: String,
-    pub operator: Operator,
-    pub value: DataType,
+pub enum WhereClause {
+    Simple {
+        column: String,
+        operator: Operator,
+        value: DataType,
+    },
+    And {
+        left: Box<WhereClause>,
+        right: Box<WhereClause>,
+    },
+    Or {
+        left: Box<WhereClause>,
+        right: Box<WhereClause>,
+    },
 }
 
 // 操作符
@@ -59,6 +89,29 @@ pub enum Operator {
     Lt,
     Ge,
     Le,
+    IsNull,
+    IsNotNull,
+}
+
+// 表达式
+#[derive(Debug)]
+pub enum Expression {
+    Literal(DataType),
+    Column(String),
+    Binary {
+        left: Box<Expression>,
+        operator: ArithmeticOperator,
+        right: Box<Expression>,
+    },
+}
+
+// 算术运算符
+#[derive(Debug, PartialEq)]
+pub enum ArithmeticOperator {
+    Add,     // +
+    Subtract, // -
+    Multiply, // *
+    Divide,   // /
 }
 
 // SQL解析器
