@@ -16,7 +16,7 @@ pub enum DbError {
     #[error("{0}")]
     TypeError(#[from] TypeError),
     
-    #[error("SQL错误: {0}")]
+    #[error("Error: Syntax error")]
     SqlError(String),
     
     #[error("事务错误: {0}")]

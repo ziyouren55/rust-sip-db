@@ -135,7 +135,7 @@ impl Cli {
                         if !display_stmt.trim().is_empty() {
                             println!("执行SQL: {}", display_stmt);
                             if let Err(e) = db.execute_sql(&format!("{};", stmt)) {
-                                println!("错误: {}", e);
+                                println!("{}", e);
                             }
                         } else {
                             println!("跳过仅包含注释的语句");

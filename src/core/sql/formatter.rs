@@ -19,7 +19,9 @@ impl TableFormatter {
         for row in rows {
             for (i, cell) in row.iter().enumerate() {
                 if i < max_widths.len() {
-                    max_widths[i] = max_widths[i].max(cell.len());
+                    // 如果单元格是"NULL"则当作空字符串处理
+                    let cell_width = if cell == "NULL" { 0 } else { cell.len() };
+                    max_widths[i] = max_widths[i].max(cell_width);
                 }
             }
         }
@@ -66,8 +68,10 @@ impl TableFormatter {
         
         for (i, cell) in cells.iter().enumerate() {
             if i < widths.len() {
-                let padding = widths[i] - cell.len();
-                row_line.push_str(&format!(" {} {}", cell, " ".repeat(padding)));
+                // 如果是"NULL"，则显示为空白
+                let display_cell = if cell == "NULL" { "" } else { cell };
+                let padding = widths[i] - display_cell.len();
+                row_line.push_str(&format!(" {} {}", display_cell, " ".repeat(padding)));
                 
                 if i < cells.len() - 1 {
                     row_line.push('|');

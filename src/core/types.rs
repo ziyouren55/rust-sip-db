@@ -44,10 +44,10 @@ pub enum TypeError {
         actual_length: usize,
     },
     
-    #[error("{0}")]
+    #[error("Field '{0}' doesn't have a default value")]
     NullValue(String),
 
-    #[error("{0}")]
+    #[error("Error: Duplicate entry '{0}' for key 'PRIMARY'")]
     PrimaryKeyViolation(String),
 }
 
@@ -98,9 +98,7 @@ impl Table {
             // 检查是否有重复的主键值
             for existing_row in &self.rows {
                 if &existing_row[pk_index] == pk_value {
-                    return Err(TypeError::PrimaryKeyViolation(format!(
-                        "主键值 {} 已存在", pk_value
-                    )));
+                    return Err(TypeError::PrimaryKeyViolation(pk_value.to_string()));
                 }
             }
         }
@@ -126,16 +124,12 @@ impl Table {
 
             // 检查非空约束
             if !column.nullable && matches!(value, DataType::Null) {
-                return Err(TypeError::NullValue(format!(
-                    "列 {} 不允许为NULL", column.name
-                )));
+                return Err(TypeError::NullValue(column.name.clone()));
             }
             
             // 检查主键不能为NULL
             if column.primary_key && matches!(value, DataType::Null) {
-                return Err(TypeError::PrimaryKeyViolation(format!(
-                    "主键列 {} 不能为NULL", column.name
-                )));
+                return Err(TypeError::NullValue(column.name.clone()));
             }
         }
         
