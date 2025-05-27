@@ -180,7 +180,7 @@ impl<'a> SqlExecutor<'a> {
                 
                 for (i, expr) in expressions.iter().enumerate() {
                     // 计算表达式
-                    let result = self.evaluate_expression(expr, None)?;
+                    let result = self.evaluate_expression(expr, None, "")?;
                     
                     // 使用原始 SQL 中的表达式作为表头
                     let header = if i < expr_parts.len() {
@@ -240,22 +240,9 @@ impl<'a> SqlExecutor<'a> {
                     if where_clause.is_none() || evaluate_where_clause(row, where_clause.as_ref().unwrap(), &table_data.columns)? {
                         // 计算每个表达式的值
                         let mut row_values = Vec::new();
-                        // 在SelectWithExpressions处理中
                         for expr in &expressions {
-                            // 首先尝试在当前表中查找列
-                            match expr {
-                                super::Expression::Column(name) if !name.contains('.') => {
-                                    if let Some(col_index) = table_data.columns.iter().position(|col| &col.name == name) {
-                                        let result = row[col_index].clone();
-                                        row_values.push(result.to_string());
-                                        continue;
-                                    }
-                                },
-                                _ => {}
-                            }
-
-                            // 如果在当前表中找不到，或者不是简单的列引用，使用evaluate_expression
-                            let result = self.evaluate_expression(expr, Some(row))?;
+                            // 计算表达式的值
+                            let result = self.evaluate_expression(expr, Some(row), &table)?;
                             row_values.push(result.to_string());
                         }
                         selected_rows.push(row_values);
@@ -375,7 +362,7 @@ impl<'a> SqlExecutor<'a> {
     }
 
     // 评估表达式的值
-    pub fn evaluate_expression(&self, expr: &super::Expression, row: Option<&[DataType]>) -> Result<DataType, DbError> {
+    pub fn evaluate_expression(&self, expr: &super::Expression, row: Option<&[DataType]>, current_table: &str) -> Result<DataType, DbError> {
         match expr {
             super::Expression::Literal(value) => Ok(value.clone()),
             super::Expression::Column(name) => {
@@ -386,15 +373,11 @@ impl<'a> SqlExecutor<'a> {
                     }
                     
                     // 获取当前表
-                    let table_name = if let Some(table_name) = name.split('.').next() {
-                        if name.contains('.') {
-                            table_name
-                        } else {
-                            // 没有表名前缀，无法确定列属于哪个表
-                            ""
-                        }
+                    let table_name = if name.contains('.') {
+                        name.split('.').next().unwrap_or("")
                     } else {
-                        ""
+                        // 使用当前查询的表名
+                        current_table
                     };
                     
                     // 获取列名
@@ -413,14 +396,16 @@ impl<'a> SqlExecutor<'a> {
                         }
                     }
                     
-                    // 如果没有表名前缀，尝试直接从行数据中查找
-                    if table_name.is_empty() {
+                    // 如果没有找到，尝试在所有表中查找
+                    if table_name.is_empty() || table_name == current_table {
                         // 从所有表中查找此列名
                         for (i, _) in self.storage.get_tables()?.iter().enumerate() {
                             if let Ok(Some(table)) = self.storage.get_table_by_index(i) {
-                                if let Some(col_index) = table.columns.iter().position(|col| &col.name == name) {
-                                    if col_index < row_data.len() {
-                                        return Ok(row_data[col_index].clone());
+                                if &table.name != current_table { // 跳过当前表，因为已经查找过
+                                    if let Some(col_index) = table.columns.iter().position(|col| &col.name == name) {
+                                        if col_index < row_data.len() {
+                                            return Ok(row_data[col_index].clone());
+                                        }
                                     }
                                 }
                             }
@@ -434,8 +419,8 @@ impl<'a> SqlExecutor<'a> {
                 }
             },
             super::Expression::Binary { left, operator, right } => {
-                let left_value = self.evaluate_expression(left, row)?;
-                let right_value = self.evaluate_expression(right, row)?;
+                let left_value = self.evaluate_expression(left, row, current_table)?;
+                let right_value = self.evaluate_expression(right, row, current_table)?;
                 
                 match (left_value, right_value) {
                     (DataType::Int(a), DataType::Int(b)) => {
@@ -690,9 +675,16 @@ pub fn evaluate_expression_without_storage(expr: &super::Expression, row: &[Data
                 return Err(DbError::SqlError("不能直接使用 * 作为表达式".to_string()));
             }
             
+            // 获取列名（不考虑表名前缀，因为WHERE子句通常只涉及当前表）
+            let column_name = if name.contains('.') {
+                name.split('.').nth(1).unwrap_or(name)
+            } else {
+                name
+            };
+            
             // 获取列索引
             let col_index = columns.iter()
-                .position(|col| &col.name == name)
+                .position(|col| &col.name == column_name)
                 .ok_or_else(|| DbError::SqlError(format!("列 {} 未找到", name)))?;
             
             if col_index < row.len() {
