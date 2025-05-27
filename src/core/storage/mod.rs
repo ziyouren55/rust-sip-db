@@ -1,10 +1,9 @@
 pub mod file;
 pub mod memory;
 
-use std::collections::HashMap;
-use std::path::PathBuf;
 use crate::core::error::DbError;
-use crate::core::types::{Table, Column};
+use crate::core::types::Table;
+use std::path::PathBuf;
 
 pub trait Storage {
     // 表操作

@@ -240,8 +240,21 @@ impl<'a> SqlExecutor<'a> {
                     if where_clause.is_none() || evaluate_where_clause(row, where_clause.as_ref().unwrap(), &table_data.columns)? {
                         // 计算每个表达式的值
                         let mut row_values = Vec::new();
+                        // 在SelectWithExpressions处理中
                         for expr in &expressions {
-                            // 计算表达式的值
+                            // 首先尝试在当前表中查找列
+                            match expr {
+                                super::Expression::Column(name) if !name.contains('.') => {
+                                    if let Some(col_index) = table_data.columns.iter().position(|col| &col.name == name) {
+                                        let result = row[col_index].clone();
+                                        row_values.push(result.to_string());
+                                        continue;
+                                    }
+                                },
+                                _ => {}
+                            }
+
+                            // 如果在当前表中找不到，或者不是简单的列引用，使用evaluate_expression
                             let result = self.evaluate_expression(expr, Some(row))?;
                             row_values.push(result.to_string());
                         }
@@ -319,7 +332,7 @@ impl<'a> SqlExecutor<'a> {
                     // 获取表中所有列名
                     table_data.columns.iter().map(|c| c.name.clone()).collect()
                 } else {
-                    columns
+                    columns.clone()
                 };
 
                 // 收集满足条件的行数据

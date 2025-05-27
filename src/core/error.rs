@@ -1,7 +1,6 @@
-use thiserror::Error;
-use std::io;
 use crate::core::types::TypeError;
-use std::fmt;
+use std::io;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum DbError {

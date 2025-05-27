@@ -1,36 +1,34 @@
-use simple_db::execute_sql;
+use simple_db::{execute_sql, run_simple_db};
 
 fn main() {
     // 测试包含多条语句和注释的长SQL代码
     let long_sql = r#"
-    -- 创建带有Float类型的表
-CREATE TABLE test_float (
-    id INT PRIMARY KEY,
-    float_val FLOAT,
-    int_val INT,
-    name VARCHAR(50)
-);
+           CREATE TABLE books_test15 (
+            id INT(32) PRIMARY KEY,
+            name VARCHAR(100),
+            left_num INT(32),
+            discription VARCHAR(150),
+            price INT NOT NULL
+        );
 
--- 插入测试数据
-INSERT INTO test_float VALUES (1, 3.14, 10, 'test1');
-INSERT INTO test_float VALUES (2, 2.5, 5, 'test2');
-INSERT INTO test_float VALUES (3, 7.8, 15, 'test3');
+        INSERT INTO books_test15 (id, name, discription, price)VALUES (1, "SETI", "Search for ET", 32);
+        INSERT INTO books_test15 (left_num, id, name, price) VALUES (23, 2, "Rust Porgraming", 66);
 
--- 测试四则运算表达式
-SELECT float_val + int_val, float_val - int_val, float_val * int_val, float_val / int_val FROM test_float;
-
--- 测试WHERE中的比较表达式
-SELECT * FROM test_float WHERE float_val > 3.0;
-SELECT * FROM test_float WHERE float_val + int_val > 10;
+        -- 查询表中的所有数据
+        SELECT id, name, discription FROM books_test15 where left_num IS NULL and price < 50;
     "#;
     
     // 执行长SQL代码
-    let result = execute_sql(long_sql);
+    let mock_args = vec![
+        "simple_db".to_string(),  // 程序名（通常是第一个参数）
+        "./tests/input.txt".to_string()  // 文件路径参数
+    ];
+    let result = run_simple_db(mock_args);
     
-    // 显示执行结果
-    if result {
-        println!("\n所有SQL语句执行成功！");
-    } else {
-        println!("\n部分SQL语句执行失败，详见上方错误信息");
-    }
+    // // 显示执行结果
+    // if result {
+    //     println!("\n所有SQL语句执行成功！");
+    // } else {
+    //     println!("\n部分SQL语句执行失败，详见上方错误信息");
+    // }
 } 

@@ -1,9 +1,8 @@
 pub mod core;
 
-pub use core::db::{Database, StorageType, ErrorDisplayMode};
+pub use core::db::{Database, ErrorDisplayMode, StorageType};
+use std::io::{self, Write};
 use std::path::PathBuf;
-use std::io::{self, Write, Cursor};
-use crate::core::error::DbError;
 
 /// SQL执行结果结构体
 #[derive(Debug, Clone)]
@@ -281,7 +280,7 @@ pub fn run_interactive_shell(db: &mut Database) -> Result<(), Box<dyn std::error
                 sql_buffer.clear();
                 continue;
             },
-            _ => handle_sql_input(input, &mut sql_buffer, &mut is_continuation)?
+            _ => handle_sql_input(input, &mut sql_buffer)?
         }
 
         // 检查SQL缓冲区是否包含分号，表示SQL语句结束
@@ -297,7 +296,7 @@ pub fn run_interactive_shell(db: &mut Database) -> Result<(), Box<dyn std::error
 }
 
 /// 处理SQL输入
-fn handle_sql_input(input: &str, sql_buffer: &mut String, is_continuation: &mut bool) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_sql_input(input: &str, sql_buffer: &mut String) -> Result<(), Box<dyn std::error::Error>> {
     // 将输入添加到SQL缓冲区
     if !input.trim_start().starts_with("--") {
         // 检查是否是多行注释的开始
