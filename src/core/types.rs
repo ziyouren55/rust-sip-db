@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
     Int(i32),
+    Float(f64),
     Varchar(String),
     Null,
 }
@@ -12,6 +13,7 @@ pub enum DataType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ColumnType {
     Int(Option<usize>), // 整数类型可选位数
+    Float(Option<usize>), // 浮点数类型可选位数
     Varchar(usize),     // 存储varchar的最大长度
 }
 
@@ -55,6 +57,7 @@ impl DataType {
     pub fn matches_column_type(&self, column_type: &ColumnType) -> bool {
         match (self, column_type) {
             (DataType::Int(_), ColumnType::Int(_)) => true,
+            (DataType::Float(_), ColumnType::Float(_)) => true,
             (DataType::Varchar(s), ColumnType::Varchar(max_len)) => s.len() <= *max_len,
             (DataType::Null, _) => true,
             _ => false,
@@ -66,6 +69,7 @@ impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DataType::Int(n) => write!(f, "{}", n),
+            DataType::Float(n) => write!(f, "{}", n),
             DataType::Varchar(s) => write!(f, "{}", s),
             DataType::Null => write!(f, "NULL"),
         }
@@ -114,7 +118,7 @@ impl Table {
             });
         }
 
-        for (i, (value, column)) in row.iter().zip(&self.columns).enumerate() {
+        for (_i, (value, column)) in row.iter().zip(&self.columns).enumerate() {
             if !value.matches_column_type(&column.data_type) {
                 return Err(TypeError::TypeMismatch {
                     expected: column.data_type.clone(),

@@ -47,6 +47,7 @@ pub enum Token {
     Identifier(String),
     String(String),
     Number(i32),
+    Float(f64),
     // 其他
     Comment(String),
     MultiLineComment(String), // 新增的多行注释类型
@@ -132,9 +133,21 @@ impl Lexer {
             }
 
             // 处理数字
-            if c.is_digit(10) {
-                let number = self.read_number();
-                tokens.push(Token::Number(number));
+            if c.is_digit(10) || (c == '.' && self.peek().map_or(false, |next| next.is_digit(10))) {
+                let number_str = self.read_number_str();
+                if number_str.contains('.') {
+                    // 如果包含小数点，解析为浮点数
+                    match number_str.parse::<f64>() {
+                        Ok(f) => tokens.push(Token::Float(f)),
+                        Err(_) => return Err(DbError::SqlError(format!("无效的浮点数: {}", number_str))),
+                    }
+                } else {
+                    // 如果不包含小数点，解析为整数
+                    match number_str.parse::<i32>() {
+                        Ok(i) => tokens.push(Token::Number(i)),
+                        Err(_) => return Err(DbError::SqlError(format!("无效的整数: {}", number_str))),
+                    }
+                }
                 continue;
             }
 
@@ -212,8 +225,10 @@ impl Lexer {
         identifier
     }
 
-    fn read_number(&mut self) -> i32 {
+    fn read_number_str(&mut self) -> String {
         let mut number = String::new();
+        let mut has_decimal = false;
+        
         while self.position < self.input.len() {
             // 安全地获取当前字符
             let c = match self.input.chars().nth(self.position) {
@@ -224,12 +239,16 @@ impl Lexer {
             if c.is_digit(10) {
                 number.push(c);
                 self.position += 1;
+            } else if c == '.' && !has_decimal {
+                // 如果是小数点，且之前没有小数点
+                has_decimal = true;
+                number.push(c);
+                self.position += 1;
             } else {
                 break;
             }
         }
-        // 安全地解析数字，如果解析失败返回0（实际应用中可能需要更好的错误处理）
-        number.parse().unwrap_or(0)
+        number
     }
 
     fn read_until(&mut self, end: char) -> String {
@@ -268,5 +287,10 @@ impl Lexer {
         }
         
         result
+    }
+
+    // 保留原来的read_number方法以兼容现有代码
+    fn read_number(&mut self) -> i32 {
+        self.read_number_str().parse().unwrap_or(0)
     }
 } 

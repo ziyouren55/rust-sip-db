@@ -362,7 +362,7 @@ impl<'a> SqlExecutor<'a> {
     }
 
     // 评估表达式的值
-    fn evaluate_expression(&self, expr: &super::Expression, row: Option<&[DataType]>) -> Result<DataType, DbError> {
+    pub fn evaluate_expression(&self, expr: &super::Expression, row: Option<&[DataType]>) -> Result<DataType, DbError> {
         match expr {
             super::Expression::Literal(value) => Ok(value.clone()),
             super::Expression::Column(name) => {
@@ -439,6 +439,50 @@ impl<'a> SqlExecutor<'a> {
                         };
                         Ok(DataType::Int(result))
                     },
+                    (DataType::Float(a), DataType::Float(b)) => {
+                        let result = match operator {
+                            super::ArithmeticOperator::Add => a + b,
+                            super::ArithmeticOperator::Subtract => a - b,
+                            super::ArithmeticOperator::Multiply => a * b,
+                            super::ArithmeticOperator::Divide => {
+                                if b == 0.0 {
+                                    return Err(DbError::SqlError("除数不能为零".to_string()));
+                                }
+                                a / b
+                            },
+                        };
+                        Ok(DataType::Float(result))
+                    },
+                    (DataType::Int(a), DataType::Float(b)) => {
+                        let a_float = a as f64;
+                        let result = match operator {
+                            super::ArithmeticOperator::Add => a_float + b,
+                            super::ArithmeticOperator::Subtract => a_float - b,
+                            super::ArithmeticOperator::Multiply => a_float * b,
+                            super::ArithmeticOperator::Divide => {
+                                if b == 0.0 {
+                                    return Err(DbError::SqlError("除数不能为零".to_string()));
+                                }
+                                a_float / b
+                            },
+                        };
+                        Ok(DataType::Float(result))
+                    },
+                    (DataType::Float(a), DataType::Int(b)) => {
+                        let b_float = b as f64;
+                        let result = match operator {
+                            super::ArithmeticOperator::Add => a + b_float,
+                            super::ArithmeticOperator::Subtract => a - b_float,
+                            super::ArithmeticOperator::Multiply => a * b_float,
+                            super::ArithmeticOperator::Divide => {
+                                if b == 0 {
+                                    return Err(DbError::SqlError("除数不能为零".to_string()));
+                                }
+                                a / b_float
+                            },
+                        };
+                        Ok(DataType::Float(result))
+                    },
                     // 可以添加更多类型组合的处理
                     _ => Err(DbError::SqlError("不支持的操作数类型".to_string())),
                 }
@@ -514,21 +558,33 @@ fn evaluate_where_clause(row: &[DataType], where_clause: &WhereClause, columns: 
                 Operator::Ne => row_value != compare_value,
                 Operator::Gt => match (row_value, compare_value) {
                     (DataType::Int(a), DataType::Int(b)) => a > b,
+                    (DataType::Float(a), DataType::Float(b)) => a > b,
+                    (DataType::Float(a), DataType::Int(b)) => a > &(*b as f64),
+                    (DataType::Int(a), DataType::Float(b)) => &(*a as f64) > b,
                     (DataType::Varchar(a), DataType::Varchar(b)) => a > b,
                     _ => return Err(DbError::SqlError("类型不匹配".to_string())),
                 },
                 Operator::Lt => match (row_value, compare_value) {
                     (DataType::Int(a), DataType::Int(b)) => a < b,
+                    (DataType::Float(a), DataType::Float(b)) => a < b,
+                    (DataType::Float(a), DataType::Int(b)) => a < &(*b as f64),
+                    (DataType::Int(a), DataType::Float(b)) => &(*a as f64) < b,
                     (DataType::Varchar(a), DataType::Varchar(b)) => a < b,
                     _ => return Err(DbError::SqlError("类型不匹配".to_string())),
                 },
                 Operator::Ge => match (row_value, compare_value) {
                     (DataType::Int(a), DataType::Int(b)) => a >= b,
+                    (DataType::Float(a), DataType::Float(b)) => a >= b,
+                    (DataType::Float(a), DataType::Int(b)) => a >= &(*b as f64),
+                    (DataType::Int(a), DataType::Float(b)) => &(*a as f64) >= b,
                     (DataType::Varchar(a), DataType::Varchar(b)) => a >= b,
                     _ => return Err(DbError::SqlError("类型不匹配".to_string())),
                 },
                 Operator::Le => match (row_value, compare_value) {
                     (DataType::Int(a), DataType::Int(b)) => a <= b,
+                    (DataType::Float(a), DataType::Float(b)) => a <= b,
+                    (DataType::Float(a), DataType::Int(b)) => a <= &(*b as f64),
+                    (DataType::Int(a), DataType::Float(b)) => &(*a as f64) <= b,
                     (DataType::Varchar(a), DataType::Varchar(b)) => a <= b,
                     _ => return Err(DbError::SqlError("类型不匹配".to_string())),
                 },
@@ -536,6 +592,53 @@ fn evaluate_where_clause(row: &[DataType], where_clause: &WhereClause, columns: 
                 Operator::IsNotNull => !matches!(row_value, DataType::Null),
             };
 
+            Ok(result)
+        },
+        WhereClause::Expression { left, operator, right } => {
+            // 使用不需要存储引用的函数评估表达式
+            let left_value = evaluate_expression_without_storage(left, row, columns)?;
+            let right_value = evaluate_expression_without_storage(right, row, columns)?;
+            
+            // 比较两个表达式的结果
+            let result = match operator {
+                Operator::Eq => left_value == right_value,
+                Operator::Ne => left_value != right_value,
+                Operator::Gt => match (&left_value, &right_value) {
+                    (DataType::Int(a), DataType::Int(b)) => a > b,
+                    (DataType::Float(a), DataType::Float(b)) => a > b,
+                    (DataType::Float(a), DataType::Int(b)) => a > &(*b as f64),
+                    (DataType::Int(a), DataType::Float(b)) => &(*a as f64) > b,
+                    (DataType::Varchar(a), DataType::Varchar(b)) => a > b,
+                    _ => return Err(DbError::SqlError("类型不匹配".to_string())),
+                },
+                Operator::Lt => match (&left_value, &right_value) {
+                    (DataType::Int(a), DataType::Int(b)) => a < b,
+                    (DataType::Float(a), DataType::Float(b)) => a < b,
+                    (DataType::Float(a), DataType::Int(b)) => a < &(*b as f64),
+                    (DataType::Int(a), DataType::Float(b)) => &(*a as f64) < b,
+                    (DataType::Varchar(a), DataType::Varchar(b)) => a < b,
+                    _ => return Err(DbError::SqlError("类型不匹配".to_string())),
+                },
+                Operator::Ge => match (&left_value, &right_value) {
+                    (DataType::Int(a), DataType::Int(b)) => a >= b,
+                    (DataType::Float(a), DataType::Float(b)) => a >= b,
+                    (DataType::Float(a), DataType::Int(b)) => a >= &(*b as f64),
+                    (DataType::Int(a), DataType::Float(b)) => &(*a as f64) >= b,
+                    (DataType::Varchar(a), DataType::Varchar(b)) => a >= b,
+                    _ => return Err(DbError::SqlError("类型不匹配".to_string())),
+                },
+                Operator::Le => match (&left_value, &right_value) {
+                    (DataType::Int(a), DataType::Int(b)) => a <= b,
+                    (DataType::Float(a), DataType::Float(b)) => a <= b,
+                    (DataType::Float(a), DataType::Int(b)) => a <= &(*b as f64),
+                    (DataType::Int(a), DataType::Float(b)) => &(*a as f64) <= b,
+                    (DataType::Varchar(a), DataType::Varchar(b)) => a <= b,
+                    _ => return Err(DbError::SqlError("类型不匹配".to_string())),
+                },
+                Operator::IsNull => matches!(left_value, DataType::Null),
+                Operator::IsNotNull => !matches!(left_value, DataType::Null),
+            };
+            
             Ok(result)
         },
         WhereClause::And { left, right } => {
@@ -561,6 +664,95 @@ fn evaluate_where_clause(row: &[DataType], where_clause: &WhereClause, columns: 
             
             let right_result = evaluate_where_clause(row, right, columns)?;
             Ok(left_result || right_result)
+        },
+    }
+}
+
+// 不使用存储引用的表达式求值函数，用于WHERE子句评估
+pub fn evaluate_expression_without_storage(expr: &super::Expression, row: &[DataType], columns: &[crate::core::types::Column]) -> Result<DataType, DbError> {
+    match expr {
+        super::Expression::Literal(value) => Ok(value.clone()),
+        super::Expression::Column(name) => {
+            if name == "*" {
+                return Err(DbError::SqlError("不能直接使用 * 作为表达式".to_string()));
+            }
+            
+            // 获取列索引
+            let col_index = columns.iter()
+                .position(|col| &col.name == name)
+                .ok_or_else(|| DbError::SqlError(format!("列 {} 未找到", name)))?;
+            
+            if col_index < row.len() {
+                Ok(row[col_index].clone())
+            } else {
+                Err(DbError::SqlError(format!("索引超出范围: {}", col_index)))
+            }
+        },
+        super::Expression::Binary { left, operator, right } => {
+            let left_value = evaluate_expression_without_storage(left, row, columns)?;
+            let right_value = evaluate_expression_without_storage(right, row, columns)?;
+            
+            match (left_value, right_value) {
+                (DataType::Int(a), DataType::Int(b)) => {
+                    let result = match operator {
+                        super::ArithmeticOperator::Add => a + b,
+                        super::ArithmeticOperator::Subtract => a - b,
+                        super::ArithmeticOperator::Multiply => a * b,
+                        super::ArithmeticOperator::Divide => {
+                            if b == 0 {
+                                return Err(DbError::SqlError("除数不能为零".to_string()));
+                            }
+                            a / b
+                        },
+                    };
+                    Ok(DataType::Int(result))
+                },
+                (DataType::Float(a), DataType::Float(b)) => {
+                    let result = match operator {
+                        super::ArithmeticOperator::Add => a + b,
+                        super::ArithmeticOperator::Subtract => a - b,
+                        super::ArithmeticOperator::Multiply => a * b,
+                        super::ArithmeticOperator::Divide => {
+                            if b == 0.0 {
+                                return Err(DbError::SqlError("除数不能为零".to_string()));
+                            }
+                            a / b
+                        },
+                    };
+                    Ok(DataType::Float(result))
+                },
+                (DataType::Int(a), DataType::Float(b)) => {
+                    let a_float = a as f64;
+                    let result = match operator {
+                        super::ArithmeticOperator::Add => a_float + b,
+                        super::ArithmeticOperator::Subtract => a_float - b,
+                        super::ArithmeticOperator::Multiply => a_float * b,
+                        super::ArithmeticOperator::Divide => {
+                            if b == 0.0 {
+                                return Err(DbError::SqlError("除数不能为零".to_string()));
+                            }
+                            a_float / b
+                        },
+                    };
+                    Ok(DataType::Float(result))
+                },
+                (DataType::Float(a), DataType::Int(b)) => {
+                    let b_float = b as f64;
+                    let result = match operator {
+                        super::ArithmeticOperator::Add => a + b_float,
+                        super::ArithmeticOperator::Subtract => a - b_float,
+                        super::ArithmeticOperator::Multiply => a * b_float,
+                        super::ArithmeticOperator::Divide => {
+                            if b == 0 {
+                                return Err(DbError::SqlError("除数不能为零".to_string()));
+                            }
+                            a / b_float
+                        },
+                    };
+                    Ok(DataType::Float(result))
+                },
+                _ => Err(DbError::SqlError("不支持的操作数类型".to_string())),
+            }
         },
     }
 } 

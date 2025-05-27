@@ -1,7 +1,7 @@
+use super::lexer::Token;
+use super::SqlStatement;
 use crate::core::error::DbError;
 use crate::core::types::{Column, ColumnType, DataType};
-use super::lexer::{Token, Lexer};
-use super::SqlStatement;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -129,6 +129,20 @@ impl Parser {
                             Ok(ColumnType::Int(Some(bits)))
                         } else {
                             Ok(ColumnType::Int(None))
+                        }
+                    },
+                    "FLOAT" => {
+                        // 检查是否有位数标注
+                        if let Some(Token::LParen) = self.peek() {
+                            self.next(); // 消费左括号
+                            let bits = match self.next() {
+                                Some(Token::Number(n)) => n as usize,
+                                _ => return Err(DbError::SqlError("期望浮点数位数".to_string())),
+                            };
+                            self.expect(Token::RParen)?;
+                            Ok(ColumnType::Float(Some(bits)))
+                        } else {
+                            Ok(ColumnType::Float(None))
                         }
                     },
                     "VARCHAR" => {
@@ -347,6 +361,7 @@ impl Parser {
     fn parse_value(&mut self) -> Result<DataType, DbError> {
         match self.next() {
             Some(Token::Number(n)) => Ok(DataType::Int(n)),
+            Some(Token::Float(f)) => Ok(DataType::Float(f)),
             Some(Token::String(s)) => Ok(DataType::Varchar(s)),
             Some(Token::Null) => Ok(DataType::Null),
             Some(Token::Identifier(ident)) if ident.to_uppercase() == "NULL" => Ok(DataType::Null),
@@ -496,6 +511,10 @@ impl Parser {
             Some(Token::Number(n)) => {
                 self.next(); // 消费数字
                 Ok(super::Expression::Literal(crate::core::types::DataType::Int(n)))
+            },
+            Some(Token::Float(f)) => {
+                self.next(); // 消费浮点数
+                Ok(super::Expression::Literal(crate::core::types::DataType::Float(f)))
             },
             Some(Token::String(s)) => {
                 self.next(); // 消费字符串
@@ -669,10 +688,22 @@ impl Parser {
             return Ok(condition);
         }
 
-        // 解析简单条件
-        let column = match self.next() {
-            Some(Token::Identifier(name)) => name,
-            _ => return Err(DbError::SqlError("期望列名".to_string())),
+        // 保存当前位置，以便尝试解析表达式
+        let current_position = self.position;
+        
+        // 尝试解析左侧表达式
+        let left_expr = match self.parse_expression() {
+            Ok(expr) => expr,
+            Err(_) => {
+                // 如果解析表达式失败，恢复位置并尝试解析简单条件
+                self.position = current_position;
+                
+                // 解析简单列名
+                match self.next() {
+                    Some(Token::Identifier(name)) => super::Expression::Column(name),
+                    _ => return Err(DbError::SqlError("期望列名或表达式".to_string())),
+                }
+            }
         };
 
         // 处理IS NULL和IS NOT NULL的情况
@@ -701,12 +732,17 @@ impl Parser {
                         super::Operator::IsNull
                     };
                     
-                    // IS NULL条件不需要值，但为了保持一致性，使用Null
-                    return Ok(super::WhereClause::Simple { 
-                        column, 
-                        operator, 
-                        value: crate::core::types::DataType::Null 
-                    });
+                    // 将表达式转换为列名（如果可能）
+                    if let super::Expression::Column(column) = left_expr {
+                        // IS NULL条件不需要值，但为了保持一致性，使用Null
+                        return Ok(super::WhereClause::Simple { 
+                            column, 
+                            operator, 
+                            value: crate::core::types::DataType::Null 
+                        });
+                    } else {
+                        return Err(DbError::SqlError("IS NULL/NOT NULL 只能用于列名".to_string()));
+                    }
                 }
                 _ => return Err(DbError::SqlError("期望NULL关键字".to_string())),
             }
@@ -722,9 +758,15 @@ impl Parser {
             _ => return Err(DbError::SqlError("期望操作符".to_string())),
         };
 
-        let value = self.parse_value()?;
-
-        Ok(super::WhereClause::Simple { column, operator, value })
+        // 解析右侧值
+        let right_expr = self.parse_expression()?;
+        
+        // 创建表达式条件
+        Ok(super::WhereClause::Expression { 
+            left: Box::new(left_expr),
+            operator, 
+            right: Box::new(right_expr) 
+        })
     }
 
     fn parse_order_by(&mut self) -> Result<Option<super::OrderBy>, DbError> {

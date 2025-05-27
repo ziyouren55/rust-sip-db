@@ -74,6 +74,11 @@ pub enum WhereClause {
         operator: Operator,
         value: DataType,
     },
+    Expression {
+        left: Box<Expression>,
+        operator: Operator,
+        right: Box<Expression>,
+    },
     And {
         left: Box<WhereClause>,
         right: Box<WhereClause>,
