@@ -1,21 +1,12 @@
-use std::io::{self, Write};
-use simple_db::core::db::{Database, StorageType};
-use simple_db::{get_default_db_path, run_interactive_shell};
+use std::env;
+use simple_db::run_simple_db;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("SimpleDB - 一个简单的数据库实现");
-    println!("输入 'help' 获取帮助信息");
-    println!("输入 'exit' 退出程序");
-
-    // 使用当前目录作为数据库目录
-    let db_path = get_default_db_path();
-    println!("数据库存储目录: {}", db_path.display());
-
-    let mut db = Database::new(StorageType::File(db_path));
-    db.load()?;
-
-    // 运行交互式shell
-    run_interactive_shell(&mut db)?;
-
-    Ok(())
+    // 收集命令行参数
+    let args: Vec<String> = env::args().collect();
+    
+    // 调用库函数处理命令行参数并运行程序
+    run_simple_db(args)
 }
+
+//cargo run ./target/release/simple_db ./tests/input.txt

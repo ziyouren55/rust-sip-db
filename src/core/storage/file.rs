@@ -169,7 +169,7 @@ impl Storage for FileStorage {
                         if let Some(file_stem) = path.file_stem() {
                             if let Some(table_name) = file_stem.to_str() {
                                 self.load_table(table_name)?;
-        }
+                            }
                         }
                     }
                 }
@@ -177,5 +177,13 @@ impl Storage for FileStorage {
         }
         
         Ok(())
+    }
+    
+    fn is_file_storage(&self) -> bool {
+        true
+    }
+    
+    fn get_path(&self) -> PathBuf {
+        self.base_dir.clone()
     }
 } 

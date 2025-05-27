@@ -123,4 +123,12 @@ impl Database {
     pub fn begin_transaction(&mut self) -> Transaction {
         Transaction::new(&mut *self.storage)
     }
+
+    // 获取数据库存储路径
+    pub fn get_storage_path(&self) -> PathBuf {
+        match self.storage.as_ref() {
+            storage if storage.is_file_storage() => storage.get_path(),
+            _ => PathBuf::from("db"), // 如果是内存存储，返回默认路径
+        }
+    }
 } 

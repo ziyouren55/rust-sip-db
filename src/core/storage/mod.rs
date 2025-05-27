@@ -2,6 +2,7 @@ pub mod file;
 pub mod memory;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use crate::core::error::DbError;
 use crate::core::types::{Table, Column};
 
@@ -23,4 +24,8 @@ pub trait Storage {
     // 持久化
     fn save(&self) -> Result<(), DbError>;
     fn load(&mut self) -> Result<(), DbError>;
+    
+    // 存储类型和路径
+    fn is_file_storage(&self) -> bool { false } // 默认实现，返回false
+    fn get_path(&self) -> PathBuf { PathBuf::from("") } // 默认实现，返回空路径
 } 

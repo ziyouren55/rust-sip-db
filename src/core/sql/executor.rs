@@ -161,17 +161,34 @@ impl<'a> SqlExecutor<'a> {
                 
                 Ok(())
             }
-            SqlStatement::SelectExpression { expressions } => {
+            SqlStatement::SelectExpression { expressions, original_sql } => {
                 // 计算每个表达式的值
                 let mut results = Vec::new();
                 let mut headers = Vec::new();
                 
-                for expr in &expressions {
+                // 从原始 SQL 中提取表达式部分
+                let select_expressions = original_sql.trim_start()
+                    .strip_prefix("select")
+                    .or_else(|| original_sql.trim_start().strip_prefix("SELECT"))
+                    .unwrap_or(&original_sql)
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim();
+                
+                // 按逗号分割表达式
+                let expr_parts: Vec<&str> = select_expressions.split(',').collect();
+                
+                for (i, expr) in expressions.iter().enumerate() {
                     // 计算表达式
                     let result = self.evaluate_expression(expr, None)?;
                     
-                    // 为表达式生成表头
-                    let header = self.expression_to_string(expr);
+                    // 使用原始 SQL 中的表达式作为表头
+                    let header = if i < expr_parts.len() {
+                        expr_parts[i].trim().to_string()
+                    } else {
+                        // 如果无法找到对应的原始表达式，使用生成的字符串
+                        self.expression_to_string(expr)
+                    };
                     
                     results.push(result.to_string());
                     headers.push(header);
@@ -185,14 +202,36 @@ impl<'a> SqlExecutor<'a> {
                 
                 Ok(())
             }
-            SqlStatement::SelectWithExpressions { expressions, table, where_clause, order_by } => {
+            SqlStatement::SelectWithExpressions { expressions, table, where_clause, order_by, original_sql } => {
                 let table_data = self.storage.get_table(&table)?
                     .ok_or_else(|| DbError::TableError(format!("表 {} 不存在", table)))?;
                 
-                // 准备表头 - 从表达式生成
+                // 从原始 SQL 中提取 SELECT 部分
+                let select_part = original_sql.trim_start()
+                    .strip_prefix("select")
+                    .or_else(|| original_sql.trim_start().strip_prefix("SELECT"))
+                    .unwrap_or(&original_sql)
+                    .trim();
+                
+                // 提取 FROM 之前的部分
+                let expr_part = if let Some(from_pos) = select_part.to_lowercase().find("from") {
+                    select_part[..from_pos].trim()
+                } else {
+                    select_part.trim()
+                };
+                
+                // 按逗号分割表达式
+                let expr_parts: Vec<&str> = expr_part.split(',').collect();
+                
+                // 准备表头 - 从原始 SQL 表达式生成
                 let mut headers = Vec::new();
-                for expr in &expressions {
-                    headers.push(self.expression_to_string(expr));
+                for (i, expr) in expressions.iter().enumerate() {
+                    if i < expr_parts.len() {
+                        headers.push(expr_parts[i].trim().to_string());
+                    } else {
+                        // 如果无法找到对应的原始表达式，使用生成的字符串
+                        headers.push(self.expression_to_string(expr));
+                    }
                 }
                 
                 // 收集满足条件的行数据
@@ -421,7 +460,7 @@ impl<'a> SqlExecutor<'a> {
                     super::ArithmeticOperator::Multiply => "*",
                     super::ArithmeticOperator::Divide => "/",
                 };
-                format!("{} {} {}", left_str, op_str, right_str)
+                format!("{}{}{}", left_str, op_str, right_str)
             },
         }
     }

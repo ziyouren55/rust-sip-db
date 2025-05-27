@@ -16,7 +16,7 @@ impl Parser {
         }
     }
 
-    pub fn parse(&mut self, tokens: Vec<Token>) -> Result<SqlStatement, DbError> {
+    pub fn parse(&mut self, tokens: Vec<Token>, original_sql: &str) -> Result<SqlStatement, DbError> {
         // 过滤掉所有注释Token
         self.tokens = tokens.into_iter()
             .filter(|token| !matches!(token, Token::Comment(_) | Token::MultiLineComment(_)))
@@ -28,10 +28,11 @@ impl Parser {
             return Err(DbError::SqlError("空语句或仅包含注释".to_string()));
         }
         
-        self.parse_statement()
+        // 解析语句，并传递原始SQL
+        self.parse_statement(original_sql)
     }
 
-    fn parse_statement(&mut self) -> Result<SqlStatement, DbError> {
+    fn parse_statement(&mut self, original_sql: &str) -> Result<SqlStatement, DbError> {
         let current_token = self.peek().cloned();
         
         match current_token {
@@ -48,13 +49,13 @@ impl Parser {
                 let current_position = self.position;
                 
                 // 尝试解析表达式查询
-                if let Ok(expr_stmt) = self.parse_expression_select() {
+                if let Ok(expr_stmt) = self.parse_expression_select(original_sql) {
                     return Ok(expr_stmt);
                 }
                 
                 // 如果不是表达式查询，恢复位置并解析普通查询
                 self.position = current_position;
-                self.parse_normal_select()
+                self.parse_normal_select(original_sql)
             },
             Some(token) => Err(DbError::SqlError(format!("意外的语句开始: {:?}", token))),
             None => Err(DbError::SqlError("空语句".to_string())),
@@ -411,7 +412,7 @@ impl Parser {
         Ok(SqlStatement::Delete { table, where_clause })
     }
 
-    fn parse_expression_select(&mut self) -> Result<SqlStatement, DbError> {
+    fn parse_expression_select(&mut self, original_sql: &str) -> Result<SqlStatement, DbError> {
         let mut expressions = Vec::new();
         
         // 解析第一个表达式
@@ -430,7 +431,10 @@ impl Parser {
             return Err(DbError::SqlError("表达式查询不能有 FROM 子句".to_string()));
         }
         
-        Ok(SqlStatement::SelectExpression { expressions })
+        Ok(SqlStatement::SelectExpression { 
+            expressions,
+            original_sql: original_sql.to_string()
+        })
     }
     
     fn parse_expression(&mut self) -> Result<super::Expression, DbError> {
@@ -511,7 +515,7 @@ impl Parser {
         }
     }
     
-    fn parse_normal_select(&mut self) -> Result<SqlStatement, DbError> {
+    fn parse_normal_select(&mut self, original_sql: &str) -> Result<SqlStatement, DbError> {
         // 检查是否为星号(*)
         if let Some(&Token::Asterisk) = self.peek() {
             self.next(); // 消耗星号
@@ -606,6 +610,7 @@ impl Parser {
                 table, 
                 where_clause,
                 order_by,
+                original_sql: original_sql.to_string()
             })
         } else {
             Ok(SqlStatement::Select { 

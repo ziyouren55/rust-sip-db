@@ -55,12 +55,14 @@ pub enum SqlStatement {
     },
     SelectExpression {
         expressions: Vec<Expression>,
+        original_sql: String,
     },
     SelectWithExpressions {
         expressions: Vec<Expression>,
         table: String,
         where_clause: Option<WhereClause>,
         order_by: Option<OrderBy>,
+        original_sql: String,
     },
 }
 
@@ -146,6 +148,6 @@ impl SqlParser {
 
     pub fn parse(&mut self, sql: &str) -> Result<SqlStatement, DbError> {
         let tokens = self.lexer.tokenize(sql)?;
-        self.parser.parse(tokens)
+        self.parser.parse(tokens, sql)
     }
 } 

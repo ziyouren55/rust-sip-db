@@ -17,10 +17,11 @@ pub struct SqlResult {
 /// # 参数
 /// * `sql_statement` - 要执行的SQL语句
 /// * `db_path` - 可选的数据库路径，如果不提供则使用内存存储
+/// * `stop_on_error` - 是否在遇到第一个错误时立即停止执行
 /// 
 /// # 返回值
 /// * `bool` - 执行成功返回true，失败返回false
-fn execute_sql_with_path(sql_statement: &str, db_path: Option<PathBuf>) -> bool {
+pub fn execute_sql_with_path(sql_statement: &str, db_path: Option<PathBuf>, stop_on_error: bool) -> bool {
     // 创建数据库实例
     let storage_type = match db_path {
         Some(path) => StorageType::File(path),
@@ -74,6 +75,12 @@ fn execute_sql_with_path(sql_statement: &str, db_path: Option<PathBuf>) -> bool 
                     println!("{}", db.format_error(&e));
                     success = false;
                     last_had_output = false; // 执行失败，重置状态
+                    
+                    // 如果设置了遇到错误立即停止，则中断执行
+                    if stop_on_error {
+                        // println!("遇到错误，终止执行");
+                        return false;
+                    }
                 }
             }
         }
@@ -158,7 +165,7 @@ fn remove_comments(sql: &str) -> String {
 /// # 返回值
 /// * `bool` - 执行成功返回true，失败返回false
 pub fn execute_sql(sql_statement: &str) -> bool {
-    execute_sql_with_path(sql_statement, None)
+    execute_sql_with_path(sql_statement, None, false)
 }
 
 /// 获取默认数据库路径
@@ -362,5 +369,50 @@ fn process_sql_statements(db: &mut Database, sql_buffer: &mut String, is_continu
         *is_continuation = false;
     }
     
+    Ok(())
+}
+
+/// 运行SimpleDB，支持交互式模式和文件模式
+///
+/// # 参数
+/// * `args` - 命令行参数，通过 std::env::args().collect::<Vec<String>>() 获取
+///
+/// # 返回值
+/// * `Result<(), Box<dyn std::error::Error>>` - 执行结果
+pub fn run_simple_db(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+
+    // 使用当前目录作为数据库目录
+    let db_path = get_default_db_path();
+
+    let mut db = Database::new(StorageType::File(db_path.clone()));
+    db.load()?;
+
+    // 检查是否提供了SQL文件参数
+    if args.len() == 2 {
+        // 文件模式 - 读取并执行SQL文件
+        let sql_file_path = &args[1];
+        // println!("执行SQL文件: {}", sql_file_path);
+
+        // 读取文件内容
+        let sql_content = std::fs::read_to_string(sql_file_path)
+            .map_err(|e| format!("无法读取SQL文件: {}", e))?;
+
+        // 执行SQL语句，脚本模式下遇到错误立即停止
+        if execute_sql_with_path(&sql_content, Some(db.get_storage_path()), true) {
+            // println!("SQL文件执行成功");
+        } else {
+            // println!("SQL文件执行过程中出现错误");
+        }
+    } else {
+        // 交互式模式
+        println!("SimpleDB - 一个简单的数据库实现");
+        println!("数据库存储目录: {}", db_path.display());
+        println!("输入 'help' 获取帮助信息");
+        println!("输入 'exit' 退出程序");
+
+        // 运行交互式shell
+        run_interactive_shell(&mut db)?;
+    }
+
     Ok(())
 }

@@ -40,7 +40,10 @@ impl TableFormatter {
         separator.push('|');
         
         for (i, width) in max_widths.iter().enumerate() {
-            separator.push_str(&"-".repeat(width + 2)); // +2 是左右各一个空格
+            // 两边各留1个空格
+            separator.push(' ');
+            separator.push_str(&"-".repeat(*width));
+            separator.push(' ');
             
             if i < max_widths.len() - 1 {
                 separator.push('|');
@@ -70,8 +73,14 @@ impl TableFormatter {
             if i < widths.len() {
                 // 如果是"NULL"，则显示为空白
                 let display_cell = if cell == "NULL" { "" } else { cell };
+                
+                // 计算需要的填充空格
                 let padding = widths[i] - display_cell.len();
-                row_line.push_str(&format!(" {} {}", display_cell, " ".repeat(padding)));
+                
+                // 确保左右各有一个空格，内容左对齐
+                row_line.push(' ');
+                row_line.push_str(display_cell);
+                row_line.push_str(&" ".repeat(padding + 1)); // +1 确保右侧至少有一个空格
                 
                 if i < cells.len() - 1 {
                     row_line.push('|');
